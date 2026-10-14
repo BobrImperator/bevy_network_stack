@@ -1,7 +1,6 @@
 //! Stream management for `cpal`.
 
 use bevy_app::prelude::*;
-use bevy_ecs::prelude::*;
 use bevy_log::{error, warn};
 use firewheel::cpal::{self};
 

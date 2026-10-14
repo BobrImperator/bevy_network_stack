@@ -3,7 +3,10 @@
 use crate::utils::entity_set::{OrderedEntitySet, OrderedEntitySetIter};
 use bevy_ecs::{
     prelude::*,
-    query::{IterQueryData, QueryData, QueryFilter, QueryManyUniqueIter, ROQueryItem},
+    query::{
+        IterQueryData, QueryData, QueryFilter, QueryManyMatchedIter, QueryManyUniqueIter,
+        ROQueryItem,
+    },
 };
 
 /// An effect applied to a sample player.
@@ -284,7 +287,7 @@ where
     fn iter_effects<'a>(
         &self,
         effects: &'a SampleEffects,
-    ) -> QueryManyUniqueIter<'_, 's, D::ReadOnly, F, OrderedEntitySetIter<'a>>;
+    ) -> QueryManyMatchedIter<QueryManyUniqueIter<'_, 's, D::ReadOnly, F, OrderedEntitySetIter<'a>>>;
 
     /// Mutably iterate over all effects entities that match the query.
     ///
@@ -308,7 +311,7 @@ where
     fn iter_effects_mut<'a>(
         &mut self,
         effects: &'a SampleEffects,
-    ) -> QueryManyUniqueIter<'_, 's, D, F, OrderedEntitySetIter<'a>>;
+    ) -> QueryManyMatchedIter<QueryManyUniqueIter<'_, 's, D, F, OrderedEntitySetIter<'a>>>;
 }
 
 impl<'s, D, F> EffectsQuery<'s, D, F> for Query<'_, 's, D, F>
@@ -320,11 +323,12 @@ where
         &self,
         effects: &SampleEffects,
     ) -> Result<ROQueryItem<'_, 's, D>, EffectsQueryError> {
-        if self.iter_many_unique(effects.iter()).count() > 1 {
+        if self.iter_many_unique(effects.iter()).matched().count() > 1 {
             return Err(EffectsQueryError::MatchedMultiple);
         }
 
         self.iter_many_unique(effects.iter())
+            .matched()
             .next()
             .ok_or(EffectsQueryError::MatchedNone)
     }
@@ -333,11 +337,12 @@ where
         &mut self,
         effects: &SampleEffects,
     ) -> Result<D::Item<'_, 's>, EffectsQueryError> {
-        if self.iter_many_unique(effects.iter()).count() > 1 {
+        if self.iter_many_unique(effects.iter()).matched().count() > 1 {
             return Err(EffectsQueryError::MatchedMultiple);
         }
 
         self.iter_many_unique_mut(effects.iter())
+            .matched()
             .next()
             .ok_or(EffectsQueryError::MatchedNone)
     }
@@ -345,14 +350,15 @@ where
     fn iter_effects<'a>(
         &self,
         effects: &'a SampleEffects,
-    ) -> QueryManyUniqueIter<'_, 's, D::ReadOnly, F, OrderedEntitySetIter<'a>> {
-        self.iter_many_unique(effects.iter())
+    ) -> QueryManyMatchedIter<QueryManyUniqueIter<'_, 's, D::ReadOnly, F, OrderedEntitySetIter<'a>>>
+    {
+        self.iter_many_unique(effects.iter()).matched()
     }
 
     fn iter_effects_mut<'a>(
         &mut self,
         effects: &'a SampleEffects,
-    ) -> QueryManyUniqueIter<'_, 's, D, F, OrderedEntitySetIter<'a>> {
-        self.iter_many_unique_mut(effects.iter())
+    ) -> QueryManyMatchedIter<QueryManyUniqueIter<'_, 's, D, F, OrderedEntitySetIter<'a>>> {
+        self.iter_many_unique_mut(effects.iter()).matched()
     }
 }
