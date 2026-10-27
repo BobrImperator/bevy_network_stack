@@ -14,13 +14,13 @@ categories = ["game-development", "multimedia::audio"]
 
 [dependencies]
 log = "0.4"
-firewheel = { git = "https://github.com/smashedbanan/Firewheel", rev = "454ef00e59f690737f83071e7ce19ae147f96b7d", default-features = false, features = [
+firewheel = { git = "https://github.com/smashedbanan/Firewheel", rev = "431c6f08c69dd700a7c1c8f11de086cf1ba73cd8", default-features = false, features = [
   "std",
 ] }
 js-sys = { version = "0.3.77", default-features = false }
 wasm-bindgen = { version = "0.2.100", default-features = false }
 wasm-bindgen-futures = { version = "0.4.50", default-features = false }
-audioadapter = { version = "4.0", default-features = false }
+audioadapter = { version = "5.0", default-features = false }
 bevy_platform = { version = "0.20.0", default-features = false }
 
 [dependencies.web-sys]
