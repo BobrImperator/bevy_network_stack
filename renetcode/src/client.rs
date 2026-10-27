@@ -1,8 +1,11 @@
 use std::{error::Error, fmt, net::SocketAddr, time::Duration};
 
 use crate::{
-    packet::Packet, replay_protection::ReplayProtection, token::ConnectToken, NetcodeError, NETCODE_CHALLENGE_TOKEN_BYTES,
-    NETCODE_KEY_BYTES, NETCODE_MAX_PACKET_BYTES, NETCODE_MAX_PAYLOAD_BYTES, NETCODE_SEND_RATE, NETCODE_USER_DATA_BYTES,
+    packet::Packet,
+    replay_protection::ReplayProtection,
+    token::{ConnectToken, TokenGenerationError},
+    NetcodeError, NETCODE_CHALLENGE_TOKEN_BYTES, NETCODE_KEY_BYTES, NETCODE_MAX_PACKET_BYTES, NETCODE_MAX_PAYLOAD_BYTES, NETCODE_SEND_RATE,
+    NETCODE_USER_DATA_BYTES,
 };
 
 /// The reason why a client is in error state
@@ -108,7 +111,7 @@ impl NetcodeClient {
             ClientAuthentication::Secure { connect_token } => connect_token,
         };
 
-        let server_addr = connect_token.server_addresses[0].expect("cannot create or deserialize a ConnectToken without a server address");
+        let server_addr = connect_token.server_addresses[0].ok_or(TokenGenerationError::NoServerAddressAvailable)?;
 
         Ok(Self {
             sequence: 0,

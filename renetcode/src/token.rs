@@ -302,6 +302,10 @@ fn write_server_addresses(writer: &mut impl io::Write, server_addresses: &[Optio
 fn read_server_addresses(src: &mut impl io::Read) -> Result<[Option<SocketAddr>; 32], io::Error> {
     let mut server_addresses = [None; 32];
     let num_server_addresses = read_u32(src)? as usize;
+    if !(1..=server_addresses.len()).contains(&num_server_addresses) {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid server address count"));
+    }
+
     for server_address in server_addresses.iter_mut().take(num_server_addresses) {
         let host_type = read_u8(src)?;
         match host_type {
@@ -319,16 +323,9 @@ fn read_server_addresses(src: &mut impl io::Read) -> Result<[Option<SocketAddr>;
                 let addr = SocketAddr::new(IpAddr::V6(Ipv6Addr::from(ip)), port);
                 *server_address = Some(addr);
             }
-            NETCODE_ADDRESS_NONE => {} // skip
+            NETCODE_ADDRESS_NONE => return Err(io::Error::new(io::ErrorKind::InvalidData, "missing server address")),
             _ => return Err(io::Error::new(io::ErrorKind::InvalidData, "Unknown ip address type")),
         }
-    }
-
-    if server_addresses.is_empty() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "ConnectToken does not have a server address",
-        ));
     }
 
     Ok(server_addresses)
