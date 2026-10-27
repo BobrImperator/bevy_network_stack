@@ -281,21 +281,22 @@ impl<'a> Packet<'a> {
                 (sequence, additional_data, src.position() as usize)
             };
 
+            let apply_replay_protection = packet_type.apply_replay_protection();
             if let Some(ref replay_protection) = replay_protection {
-                if packet_type.apply_replay_protection() && replay_protection.already_received(sequence) {
+                if apply_replay_protection && replay_protection.already_received(sequence) {
                     return Err(NetcodeError::DuplicatedSequence);
                 }
             }
 
             dencrypted_in_place(&mut buffer[read_pos..], sequence, private_key, &aad)?;
+            let packet = Packet::read(packet_type, &buffer[read_pos..buffer.len() - NETCODE_MAC_BYTES])?;
 
             if let Some(replay_protection) = replay_protection {
-                if packet_type.apply_replay_protection() {
+                if apply_replay_protection {
                     replay_protection.advance_sequence(sequence);
                 }
             }
 
-            let packet = Packet::read(packet_type, &buffer[read_pos..buffer.len() - NETCODE_MAC_BYTES])?;
             Ok((sequence, packet))
         } else {
             Err(NetcodeError::UnavailablePrivateKey)
