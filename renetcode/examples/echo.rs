@@ -16,6 +16,9 @@ use std::{
 // Unique id used for a version of your game
 const PROTOCOL_ID: u64 = 123456789;
 
+// Lifetime of the tokens this example issues, which the server also uses as the issuer's maximum
+const CONNECT_TOKEN_LIFETIME: Duration = Duration::from_secs(300);
+
 // Helper struct to pass an username in user data inside the ConnectToken
 struct Username(String);
 
@@ -58,7 +61,7 @@ fn main() {
             let connect_token = ConnectToken::generate(
                 now,
                 PROTOCOL_ID,
-                300,
+                CONNECT_TOKEN_LIFETIME.as_secs(),
                 client_id,
                 15,
                 vec![server_addr],
@@ -125,7 +128,10 @@ fn server(addr: SocketAddr, private_key: [u8; NETCODE_KEY_BYTES]) {
         max_clients: 16,
         protocol_id: PROTOCOL_ID,
         public_addresses: vec![addr],
-        authentication: ServerAuthentication::Secure { private_key },
+        authentication: ServerAuthentication::Secure {
+            private_key,
+            max_connect_token_lifetime: CONNECT_TOKEN_LIFETIME,
+        },
     };
     let mut server: NetcodeServer = NetcodeServer::new(config);
     let udp_socket = UdpSocket::bind(addr).unwrap();
