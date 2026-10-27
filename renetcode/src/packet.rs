@@ -258,7 +258,7 @@ impl<'a> Packet<'a> {
         private_key: Option<&[u8; 32]>,
         replay_protection: Option<&mut ReplayProtection>,
     ) -> Result<(u64, Self), NetcodeError> {
-        if buffer.len() < 2 + NETCODE_MAC_BYTES {
+        if buffer.is_empty() {
             return Err(NetcodeError::PacketTooSmall);
         }
 

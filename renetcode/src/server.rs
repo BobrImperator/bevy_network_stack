@@ -387,10 +387,6 @@ impl NetcodeServer {
     }
 
     fn process_packet_internal<'a, 's>(&'s mut self, addr: SocketAddr, buffer: &'a mut [u8]) -> Result<ServerResult<'a, 's>, NetcodeError> {
-        if buffer.len() < 2 + NETCODE_MAC_BYTES {
-            return Err(NetcodeError::PacketTooSmall);
-        }
-
         // Handle connected client
         if let Some((slot, client)) = find_client_mut_by_addr(&mut self.clients, addr) {
             let (_, packet) = Packet::decode(
