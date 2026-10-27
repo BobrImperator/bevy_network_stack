@@ -269,6 +269,10 @@ impl<'a> Packet<'a> {
         if matches!(packet_type, PacketType::ConnectionRequest) {
             Ok((0, Packet::read(PacketType::ConnectionRequest, &buffer[1..])?))
         } else if let Some(private_key) = private_key {
+            if sequence_len > 8 || buffer.len() < 1 + sequence_len + NETCODE_MAC_BYTES {
+                return Err(NetcodeError::PacketTooSmall);
+            }
+
             let (sequence, aad, read_pos) = {
                 let src = &mut io::Cursor::new(&mut buffer);
                 src.set_position(1);
