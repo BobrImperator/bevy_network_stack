@@ -290,7 +290,10 @@ impl NetcodeClient {
 
         match self.state {
             ClientState::SendingConnectionRequest | ClientState::SendingConnectionResponse => {
-                let expire_seconds = self.connect_token.expire_timestamp - self.connect_token.create_timestamp;
+                let expire_seconds = self
+                    .connect_token
+                    .expire_timestamp
+                    .saturating_sub(self.connect_token.create_timestamp);
                 let connection_expired = (self.current_time - self.connect_start_time).as_secs() >= expire_seconds;
                 if connection_expired {
                     self.state = ClientState::Disconnected(DisconnectReason::ConnectTokenExpired);

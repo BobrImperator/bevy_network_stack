@@ -96,7 +96,10 @@ impl ConnectToken {
         user_data: Option<&[u8; NETCODE_USER_DATA_BYTES]>,
         private_key: &[u8; NETCODE_KEY_BYTES],
     ) -> Result<Self, TokenGenerationError> {
-        let expire_timestamp = current_time.as_secs() + expire_seconds;
+        let expire_timestamp = current_time
+            .as_secs()
+            .checked_add(expire_seconds)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "connect token expiry overflows its timestamp"))?;
 
         let private_connect_token = PrivateConnectToken::generate(client_id, timeout_seconds, server_addresses, user_data)?;
         let mut private_data = [0u8; NETCODE_CONNECT_TOKEN_PRIVATE_BYTES];
