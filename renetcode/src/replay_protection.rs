@@ -1,10 +1,9 @@
 const NETCODE_REPLAY_BUFFER_SIZE: usize = 256;
-const EMPTY: u64 = u64::MAX;
 
 #[derive(Debug, Clone)]
 pub struct ReplayProtection {
     most_recent_sequence: u64,
-    received_packet: [u64; NETCODE_REPLAY_BUFFER_SIZE],
+    received_packet: [Option<u64>; NETCODE_REPLAY_BUFFER_SIZE],
 }
 
 impl Default for ReplayProtection {
@@ -17,25 +16,17 @@ impl ReplayProtection {
     pub fn new() -> Self {
         Self {
             most_recent_sequence: 0,
-            received_packet: [EMPTY; NETCODE_REPLAY_BUFFER_SIZE],
+            received_packet: [None; NETCODE_REPLAY_BUFFER_SIZE],
         }
     }
 
     pub fn already_received(&self, sequence: u64) -> bool {
-        if sequence + NETCODE_REPLAY_BUFFER_SIZE as u64 <= self.most_recent_sequence {
+        if self.most_recent_sequence.saturating_sub(sequence) >= NETCODE_REPLAY_BUFFER_SIZE as u64 {
             return true;
         }
 
         let index = sequence as usize % NETCODE_REPLAY_BUFFER_SIZE;
-        if self.received_packet[index] == EMPTY {
-            return false;
-        }
-
-        if self.received_packet[index] >= sequence {
-            return true;
-        }
-
-        false
+        self.received_packet[index].is_some_and(|received| received >= sequence)
     }
 
     pub fn advance_sequence(&mut self, sequence: u64) {
@@ -44,7 +35,7 @@ impl ReplayProtection {
         }
 
         let index = sequence as usize % NETCODE_REPLAY_BUFFER_SIZE;
-        self.received_packet[index] = sequence;
+        self.received_packet[index] = Some(sequence);
     }
 }
 
@@ -79,5 +70,19 @@ mod tests {
         for i in 0..max_sequence {
             assert!(replay_protection.already_received(i));
         }
+    }
+
+    #[test]
+    fn full_u64_domain_and_window_boundary() {
+        let mut replay = ReplayProtection::new();
+        assert!(!replay.already_received(u64::MAX));
+        replay.advance_sequence(u64::MAX);
+        assert!(replay.already_received(u64::MAX));
+
+        let oldest_in_window = u64::MAX - 255;
+        assert!(!replay.already_received(oldest_in_window));
+        replay.advance_sequence(oldest_in_window);
+        assert!(replay.already_received(oldest_in_window));
+        assert!(replay.already_received(u64::MAX - 256));
     }
 }
