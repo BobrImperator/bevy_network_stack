@@ -382,9 +382,219 @@ impl NetcodeClient {
 
 #[cfg(test)]
 mod tests {
-    use crate::{crypto::generate_random_bytes, NETCODE_MAX_PACKET_BYTES};
+    use crate::{
+        crypto::generate_random_bytes,
+        packet::{
+            tests::{encrypt_raw_packet, for_each_adversarial_datagram, for_each_encoded_packet},
+            PacketType,
+        },
+        token::{
+            tests::{fixed_connect_token, fixed_private_token},
+            TokenGenerationError,
+        },
+        NETCODE_MAC_BYTES, NETCODE_MAX_PACKET_BYTES,
+    };
 
     use super::*;
+
+    const FIXTURE_PROTOCOL_ID: u64 = 2;
+
+    fn fixture_token(create_timestamp: u64, expire_timestamp: u64) -> ConnectToken {
+        let private = fixed_private_token(4, &["127.0.0.1:5000".parse().unwrap()]);
+        fixed_connect_token(
+            &private,
+            FIXTURE_PROTOCOL_ID,
+            create_timestamp,
+            expire_timestamp,
+            &[1; NETCODE_KEY_BYTES],
+        )
+    }
+
+    fn from_server(packet: &Packet, sequence: u64) -> Vec<u8> {
+        let mut buffer = [0u8; NETCODE_MAX_PACKET_BYTES];
+        let server_key = fixture_token(0, 30).server_to_client_key;
+        let len = packet
+            .encode(&mut buffer, FIXTURE_PROTOCOL_ID, Some((sequence, &server_key)))
+            .unwrap();
+        buffer[..len].to_vec()
+    }
+
+    /// A client driven into `state` without consuming sequence zero for a protected packet.
+    fn fixture_client_in(state: &ClientState) -> NetcodeClient {
+        let authentication = ClientAuthentication::Secure {
+            connect_token: fixture_token(0, 30),
+        };
+        let mut client = NetcodeClient::new(Duration::ZERO, authentication).unwrap();
+        client.update(Duration::ZERO).unwrap();
+        if *state != ClientState::SendingConnectionRequest {
+            let challenge = Packet::Challenge {
+                token_sequence: 7,
+                token_data: [9; NETCODE_CHALLENGE_TOKEN_BYTES],
+            };
+            client.process_packet(&mut from_server(&challenge, 0));
+        }
+        if matches!(state, ClientState::Connected | ClientState::Disconnected(_)) {
+            let keep_alive = Packet::KeepAlive {
+                client_index: 1,
+                max_clients: 4,
+            };
+            client.process_packet(&mut from_server(&keep_alive, 1));
+        }
+        if matches!(state, ClientState::Disconnected(_)) {
+            client.process_packet(&mut from_server(&Packet::Disconnect, 2));
+        }
+        assert_eq!(&client.state, state);
+        client
+    }
+
+    fn fixture_states() -> [ClientState; 4] {
+        [
+            ClientState::SendingConnectionRequest,
+            ClientState::SendingConnectionResponse,
+            ClientState::Connected,
+            ClientState::Disconnected(DisconnectReason::DisconnectedByServer),
+        ]
+    }
+
+    fn receive_state(client: &NetcodeClient) -> String {
+        format!(
+            "{:?}",
+            (
+                &client.state,
+                client.last_packet_received_time,
+                &client.replay_protection,
+                client.challenge_token_sequence,
+                client.challenge_token_data,
+                client.max_clients,
+                client.client_index,
+            )
+        )
+    }
+
+    #[test]
+    fn adversarial_datagrams_preserve_client_state() {
+        for state in fixture_states() {
+            let mut client = fixture_client_in(&state);
+            client.update(Duration::from_secs(1));
+            let before = receive_state(&client);
+            let mut case = 0;
+            for_each_adversarial_datagram(|datagram| {
+                case += 1;
+                let mut bytes = datagram.to_vec();
+                assert_eq!(
+                    client.process_packet(&mut bytes),
+                    None,
+                    "{state:?}, case {case}, length {}",
+                    datagram.len()
+                );
+                assert_eq!(before, receive_state(&client), "{state:?}, case {case}, length {}", datagram.len());
+            });
+        }
+    }
+
+    #[test]
+    fn truncated_and_corrupted_server_packets_preserve_client_state() {
+        let server_key = fixture_token(0, 30).server_to_client_key;
+        for state in fixture_states() {
+            let mut client = fixture_client_in(&state);
+            client.update(Duration::from_secs(1));
+            let before = receive_state(&client);
+            for_each_encoded_packet(FIXTURE_PROTOCOL_ID, &server_key, |sequence, packet, encoded| {
+                let mut malformed: Vec<(String, Vec<u8>)> = (0..encoded.len())
+                    .map(|len| (format!("prefix length {len}"), encoded[..len].to_vec()))
+                    .collect();
+                if !matches!(packet, Packet::ConnectionRequest { .. }) {
+                    let body_end = encoded.len() - NETCODE_MAC_BYTES;
+                    for index in (0..10.min(body_end)).chain([body_end - 1]).chain(body_end..encoded.len()) {
+                        let mut corrupt = encoded.to_vec();
+                        corrupt[index] ^= 0x01;
+                        malformed.push((format!("bit flip at {index}"), corrupt));
+                    }
+                }
+                for (case, mut bytes) in malformed {
+                    assert_eq!(
+                        client.process_packet(&mut bytes),
+                        None,
+                        "{state:?}, {packet:?} at {sequence}, {case}"
+                    );
+                    assert_eq!(before, receive_state(&client), "{state:?}, {packet:?} at {sequence}, {case}");
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn authenticated_short_keep_alive_preserves_client_replay() {
+        let server_key = fixture_token(0, 30).server_to_client_key;
+        let mut client = fixture_client_in(&ClientState::Connected);
+        let before = receive_state(&client);
+        for body_len in 0..8 {
+            let mut short = encrypt_raw_packet(PacketType::KeepAlive, 700, &[0; 8][..body_len], FIXTURE_PROTOCOL_ID, &server_key);
+            assert_eq!(client.process_packet(&mut short), None);
+            assert_eq!(before, receive_state(&client), "body length {body_len}");
+        }
+
+        let mut payload = from_server(&Packet::Payload(&[42]), 700);
+        let mut duplicate = payload.clone();
+        assert_eq!(client.process_packet(&mut payload), Some(&[42][..]));
+        assert_eq!(client.process_packet(&mut duplicate), None);
+    }
+
+    #[test]
+    fn sequence_zero_control_packets_change_client_state() {
+        let disconnect = from_server(&Packet::Disconnect, 0);
+        let denied = from_server(&Packet::ConnectionDenied, 0);
+        assert_eq!(disconnect.len(), 1 + NETCODE_MAC_BYTES);
+        assert_eq!(denied.len(), 1 + NETCODE_MAC_BYTES);
+
+        let mut client = fixture_client_in(&ClientState::Connected);
+        assert_eq!(client.process_packet(&mut disconnect.clone()), None);
+        assert_eq!(client.disconnect_reason(), Some(DisconnectReason::DisconnectedByServer));
+
+        for state in [ClientState::SendingConnectionRequest, ClientState::SendingConnectionResponse] {
+            let mut client = fixture_client_in(&state);
+            assert_eq!(client.process_packet(&mut denied.clone()), None);
+            assert_eq!(client.disconnect_reason(), Some(DisconnectReason::ConnectionDenied), "{state:?}");
+        }
+    }
+
+    #[test]
+    fn client_requires_a_first_server_address() {
+        let mut later_only = fixture_token(0, 30);
+        later_only.server_addresses[0] = None;
+        later_only.server_addresses[1] = Some("127.0.0.1:5000".parse().unwrap());
+
+        for server_addresses in [[None; 32], later_only.server_addresses] {
+            let mut connect_token = fixture_token(0, 30);
+            connect_token.server_addresses = server_addresses;
+            let result = NetcodeClient::new(Duration::ZERO, ClientAuthentication::Secure { connect_token });
+            assert!(
+                matches!(
+                    result,
+                    Err(NetcodeError::TokenGenerationError(TokenGenerationError::NoServerAddressAvailable))
+                ),
+                "{result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn inverted_token_lifetime_expires_without_requesting() {
+        for (create_timestamp, expire_timestamp, requests) in [(10, 9, false), (10, 10, false), (10, 11, true)] {
+            let mut bytes = vec![];
+            fixture_token(create_timestamp, expire_timestamp).write(&mut bytes).unwrap();
+            let connect_token = ConnectToken::read(&mut bytes.as_slice()).unwrap();
+            let mut client = NetcodeClient::new(Duration::ZERO, ClientAuthentication::Secure { connect_token }).unwrap();
+
+            assert_eq!(
+                client.update(Duration::ZERO).is_some(),
+                requests,
+                "{create_timestamp}..{expire_timestamp}"
+            );
+            let expected = if requests { None } else { Some(DisconnectReason::ConnectTokenExpired) };
+            assert_eq!(client.disconnect_reason(), expected, "{create_timestamp}..{expire_timestamp}");
+        }
+    }
 
     #[test]
     fn client_connection() {

@@ -344,8 +344,189 @@ fn get_additional_data(protocol_id: u64, expire_timestamp: u64) -> [u8; NETCODE_
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
+    use std::io::Write;
+
     use super::*;
+    use crate::{client::NetcodeClient, ClientAuthentication};
+
+    pub(crate) const FIXTURE_XNONCE: [u8; NETCODE_CONNECT_TOKEN_XNONCE_BYTES] = [33; NETCODE_CONNECT_TOKEN_XNONCE_BYTES];
+
+    /// A private token with authored fields, so packets built from it are reproducible.
+    pub(crate) fn fixed_private_token(client_id: u64, server_addresses: &[SocketAddr]) -> PrivateConnectToken {
+        let mut addresses = [None; 32];
+        for (slot, addr) in addresses.iter_mut().zip(server_addresses) {
+            *slot = Some(*addr);
+        }
+
+        PrivateConnectToken {
+            client_id,
+            timeout_seconds: 5,
+            server_addresses: addresses,
+            client_to_server_key: [11; NETCODE_KEY_BYTES],
+            server_to_client_key: [22; NETCODE_KEY_BYTES],
+            user_data: [44; NETCODE_USER_DATA_BYTES],
+        }
+    }
+
+    /// The public token carrying `private`, encrypted with the fixture xnonce.
+    pub(crate) fn fixed_connect_token(
+        private: &PrivateConnectToken,
+        protocol_id: u64,
+        create_timestamp: u64,
+        expire_timestamp: u64,
+        private_key: &[u8; NETCODE_KEY_BYTES],
+    ) -> ConnectToken {
+        let mut private_data = [0u8; NETCODE_CONNECT_TOKEN_PRIVATE_BYTES];
+        private
+            .encode(&mut private_data, protocol_id, expire_timestamp, &FIXTURE_XNONCE, private_key)
+            .unwrap();
+
+        ConnectToken {
+            client_id: private.client_id,
+            version_info: *NETCODE_VERSION_INFO,
+            protocol_id,
+            create_timestamp,
+            expire_timestamp,
+            xnonce: FIXTURE_XNONCE,
+            server_addresses: private.server_addresses,
+            client_to_server_key: private.client_to_server_key,
+            server_to_client_key: private.server_to_client_key,
+            private_data,
+            timeout_seconds: private.timeout_seconds,
+        }
+    }
+
+    /// Authenticated private token data whose address list is the given raw bytes.
+    pub(crate) fn encrypted_private_token_with_addresses(
+        address_bytes: &[u8],
+        protocol_id: u64,
+        expire_timestamp: u64,
+        private_key: &[u8; NETCODE_KEY_BYTES],
+    ) -> [u8; NETCODE_CONNECT_TOKEN_PRIVATE_BYTES] {
+        let mut buffer = [0u8; NETCODE_CONNECT_TOKEN_PRIVATE_BYTES];
+        let mut writer = Cursor::new(&mut buffer[..]);
+        writer.write_all(&9u64.to_le_bytes()).unwrap();
+        writer.write_all(&5i32.to_le_bytes()).unwrap();
+        writer.write_all(address_bytes).unwrap();
+        writer.write_all(&[11; NETCODE_KEY_BYTES]).unwrap();
+        writer.write_all(&[22; NETCODE_KEY_BYTES]).unwrap();
+        writer.write_all(&[44; NETCODE_USER_DATA_BYTES]).unwrap();
+        encrypt_in_place_xnonce(
+            &mut buffer,
+            &FIXTURE_XNONCE,
+            private_key,
+            &get_additional_data(protocol_id, expire_timestamp),
+        )
+        .unwrap();
+        buffer
+    }
+
+    /// Address lists that a token boundary must reject, labelled for assertion messages.
+    pub(crate) fn malformed_address_lists() -> Vec<(&'static str, Vec<u8>)> {
+        let ipv4: &[u8] = &[NETCODE_ADDRESS_IPV4, 127, 0, 0, 1, 0x88, 0x13];
+        let list = |count: u32, entries: &[&[u8]]| {
+            let mut bytes = count.to_le_bytes().to_vec();
+            for entry in entries {
+                bytes.extend_from_slice(entry);
+            }
+            bytes
+        };
+
+        vec![
+            ("count 0", list(0, &[])),
+            ("count 33", list(33, &[ipv4; 33])),
+            ("count u32::MAX", list(u32::MAX, &[ipv4])),
+            ("none only", list(1, &[&[NETCODE_ADDRESS_NONE]])),
+            ("none first", list(2, &[&[NETCODE_ADDRESS_NONE], ipv4])),
+            ("none later", list(2, &[ipv4, &[NETCODE_ADDRESS_NONE]])),
+            ("unknown type 3", list(1, &[&[3, 127, 0, 0, 1, 0x88, 0x13]])),
+            ("unknown type 255", list(2, &[ipv4, &[0xff]])),
+        ]
+    }
+
+    fn public_token_bytes_with_addresses(address_bytes: &[u8], with_keys: bool) -> Vec<u8> {
+        const ADDRESSES_OFFSET: usize = 8 + 13 + 8 + 8 + 8 + NETCODE_CONNECT_TOKEN_XNONCE_BYTES + NETCODE_CONNECT_TOKEN_PRIVATE_BYTES + 4;
+        let token = fixed_connect_token(&fixed_private_token(9, &["127.0.0.1:5000".parse().unwrap()]), 2, 0, 30, &[1; 32]);
+        let mut bytes = vec![];
+        token.write(&mut bytes).unwrap();
+        bytes.truncate(ADDRESSES_OFFSET);
+        bytes.extend_from_slice(address_bytes);
+        if with_keys {
+            bytes.extend_from_slice(&[11; NETCODE_KEY_BYTES]);
+            bytes.extend_from_slice(&[22; NETCODE_KEY_BYTES]);
+        }
+        bytes
+    }
+
+    #[test]
+    fn server_address_lists_are_validated_at_both_token_boundaries() {
+        let protocol_id = 2;
+        let expire_timestamp = 30;
+        let private_key = &[1; NETCODE_KEY_BYTES];
+
+        for (case, addresses) in malformed_address_lists() {
+            let public = public_token_bytes_with_addresses(&addresses, true);
+            match ConnectToken::read(&mut public.as_slice()) {
+                Err(NetcodeError::IoError(error)) => assert_eq!(error.kind(), io::ErrorKind::InvalidData, "public {case}"),
+                result => panic!("public {case}: {result:?}"),
+            }
+
+            let private = encrypted_private_token_with_addresses(&addresses, protocol_id, expire_timestamp, private_key);
+            match PrivateConnectToken::decode(&private, protocol_id, expire_timestamp, &FIXTURE_XNONCE, private_key) {
+                Err(TokenGenerationError::IoError(error)) => assert_eq!(error.kind(), io::ErrorKind::InvalidData, "private {case}"),
+                result => panic!("private {case}: {result:?}"),
+            }
+        }
+
+        let ipv4 = [NETCODE_ADDRESS_IPV4, 127, 0, 0, 1, 0x88, 0x13];
+        let mut ipv6 = vec![NETCODE_ADDRESS_IPV6];
+        ipv6.extend_from_slice(&Ipv6Addr::LOCALHOST.octets());
+        ipv6.extend_from_slice(&5000u16.to_le_bytes());
+        for entry in [&ipv4[..], &ipv6[..]] {
+            let mut list = 1u32.to_le_bytes().to_vec();
+            list.extend_from_slice(entry);
+            for cut in 0..list.len() {
+                let public = public_token_bytes_with_addresses(&list[..cut], false);
+                match ConnectToken::read(&mut public.as_slice()) {
+                    Err(NetcodeError::IoError(error)) => assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof, "cut {cut} of {list:?}"),
+                    result => panic!("cut {cut} of {list:?}: {result:?}"),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn valid_server_address_lists_start_a_client() {
+        let one: Vec<SocketAddr> = vec!["127.0.0.1:5000".parse().unwrap()];
+        let mixed: Vec<SocketAddr> = (0..32u16)
+            .map(|i| match i % 4 {
+                0 => SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
+                1 => SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0),
+                2 => SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, i as u8)), 4000 + i),
+                _ => SocketAddr::new(IpAddr::V6(Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, i)), u16::MAX - i),
+            })
+            .collect();
+        let protocol_id = 2;
+        let expire_timestamp = 30;
+        let private_key = &[1; NETCODE_KEY_BYTES];
+
+        for addresses in [one, mixed] {
+            let private = fixed_private_token(9, &addresses);
+            let token = fixed_connect_token(&private, protocol_id, 0, expire_timestamp, private_key);
+            let mut bytes = vec![];
+            token.write(&mut bytes).unwrap();
+            let read = ConnectToken::read(&mut bytes.as_slice()).unwrap();
+            assert_eq!(read, token);
+            let decoded =
+                PrivateConnectToken::decode(&read.private_data, protocol_id, expire_timestamp, &read.xnonce, private_key).unwrap();
+            assert_eq!(decoded, private);
+
+            let mut client = NetcodeClient::new(Duration::ZERO, ClientAuthentication::Secure { connect_token: read }).unwrap();
+            assert_eq!(client.server_addr(), addresses[0]);
+            assert!(client.update(Duration::ZERO).is_some());
+        }
+    }
 
     #[test]
     fn private_connect_token_serialization() {
@@ -415,5 +596,29 @@ mod tests {
         assert_eq!(token.server_addresses, private.server_addresses);
         assert_eq!(token.client_to_server_key, private.client_to_server_key);
         assert_eq!(token.server_to_client_key, private.server_to_client_key);
+    }
+
+    #[test]
+    fn generated_expiry_refuses_timestamp_overflow() {
+        let server_addresses: Vec<SocketAddr> = vec!["127.0.0.1:8080".parse().unwrap()];
+        let private_key = &[1; NETCODE_KEY_BYTES];
+        let generate = |expire_seconds| {
+            ConnectToken::generate(
+                Duration::from_secs(u64::MAX - 30),
+                2,
+                expire_seconds,
+                4,
+                5,
+                server_addresses.clone(),
+                None,
+                private_key,
+            )
+        };
+
+        assert_eq!(generate(30).unwrap().expire_timestamp, u64::MAX);
+        match generate(31) {
+            Err(TokenGenerationError::IoError(error)) => assert_eq!(error.kind(), io::ErrorKind::InvalidInput),
+            result => panic!("expected expiry overflow, got {result:?}"),
+        }
     }
 }

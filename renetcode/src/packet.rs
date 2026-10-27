@@ -382,10 +382,122 @@ fn read_sequence(source: &mut impl io::Read, len: usize) -> Result<u64, io::Erro
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use crate::{crypto::generate_random_bytes, NETCODE_MAX_PACKET_BYTES, NETCODE_MAX_PAYLOAD_BYTES};
 
     use super::*;
+
+    /// Sequence values at every prefix width boundary and at the top of the u64 domain.
+    pub(crate) const CORPUS_SEQUENCES: [u64; 20] = [
+        0,
+        1,
+        0xff,
+        0x100,
+        0xffff,
+        0x1_0000,
+        0xff_ffff,
+        0x100_0000,
+        0xffff_ffff,
+        0x1_0000_0000,
+        0xff_ffff_ffff,
+        0x100_0000_0000,
+        0xffff_ffff_ffff,
+        0x1_0000_0000_0000,
+        0xff_ffff_ffff_ffff,
+        0x100_0000_0000_0000,
+        u64::MAX - 256,
+        u64::MAX - 255,
+        u64::MAX - 1,
+        u64::MAX,
+    ];
+
+    /// Deterministic datagrams of every length up to one byte above the maximum packet size,
+    /// followed by every prefix byte at boundary lengths. Callers must copy before decoding.
+    pub(crate) fn for_each_adversarial_datagram(mut check: impl FnMut(&[u8])) {
+        for len in 0..=NETCODE_MAX_PACKET_BYTES + 1 {
+            for salt in [0u8, 1, 0x55, 0xaa, 0xff] {
+                let bytes: Vec<u8> = (0..len)
+                    .map(|index| (index as u8).wrapping_mul(73).wrapping_add(len as u8).wrapping_add(salt))
+                    .collect();
+                check(&bytes);
+            }
+        }
+
+        let boundary_lengths = (0..=32).chain([
+            1078,
+            NETCODE_MAX_PAYLOAD_BYTES,
+            NETCODE_MAX_PACKET_BYTES,
+            NETCODE_MAX_PACKET_BYTES + 1,
+        ]);
+        for len in boundary_lengths {
+            for prefix in 0..=u8::MAX {
+                let mut bytes: Vec<u8> = (0..len).map(|index| (index as u8).wrapping_mul(29).wrapping_add(prefix)).collect();
+                if let Some(first) = bytes.first_mut() {
+                    *first = prefix;
+                }
+                check(&bytes);
+            }
+        }
+    }
+
+    /// Every packet variant correctly encoded at every corpus sequence. The connection request is
+    /// unencrypted and is emitted once with sequence zero.
+    pub(crate) fn for_each_encoded_packet(protocol_id: u64, key: &[u8; NETCODE_KEY_BYTES], mut check: impl FnMut(u64, &Packet, &[u8])) {
+        let mut buffer = [0u8; NETCODE_MAX_PACKET_BYTES];
+        let request = Packet::ConnectionRequest {
+            version_info: *NETCODE_VERSION_INFO,
+            protocol_id,
+            expire_timestamp: 30,
+            xnonce: [33; NETCODE_CONNECT_TOKEN_XNONCE_BYTES],
+            data: [66; NETCODE_CONNECT_TOKEN_PRIVATE_BYTES],
+        };
+        let len = request.encode(&mut buffer, protocol_id, None).unwrap();
+        check(0, &request, &buffer[..len]);
+
+        for sequence in CORPUS_SEQUENCES {
+            let packets = [
+                Packet::ConnectionDenied,
+                Packet::Challenge {
+                    token_sequence: sequence,
+                    token_data: [77; NETCODE_CHALLENGE_TOKEN_BYTES],
+                },
+                Packet::Response {
+                    token_sequence: sequence,
+                    token_data: [88; NETCODE_CHALLENGE_TOKEN_BYTES],
+                },
+                Packet::KeepAlive {
+                    client_index: 3,
+                    max_clients: 8,
+                },
+                Packet::Payload(&[]),
+                Packet::Payload(&[42]),
+                Packet::Disconnect,
+            ];
+            for packet in packets {
+                let len = packet.encode(&mut buffer, protocol_id, Some((sequence, key))).unwrap();
+                check(sequence, &packet, &buffer[..len]);
+            }
+        }
+    }
+
+    /// Encrypts an arbitrary plaintext body under a valid prefix, so the result authenticates
+    /// even when the body is structurally invalid for its packet type.
+    pub(crate) fn encrypt_raw_packet(
+        packet_type: PacketType,
+        sequence: u64,
+        body: &[u8],
+        protocol_id: u64,
+        key: &[u8; NETCODE_KEY_BYTES],
+    ) -> Vec<u8> {
+        let prefix = encode_prefix(packet_type as u8, sequence);
+        let mut packet = vec![prefix];
+        write_sequence(&mut packet, sequence).unwrap();
+        let start = packet.len();
+        packet.extend_from_slice(body);
+        packet.extend_from_slice(&[0; NETCODE_MAC_BYTES]);
+        encrypt_in_place(&mut packet[start..], sequence, key, &get_additional_data(prefix, protocol_id)).unwrap();
+        packet
+    }
 
     #[test]
     fn connection_request_serialization() {
@@ -460,6 +572,307 @@ mod tests {
         let (d_sequence, d_packet) = Packet::decode(&mut buffer[..len], protocol_id, Some(key), None).unwrap();
         assert_eq!(sequence, d_sequence);
         assert_eq!(packet, d_packet);
+    }
+
+    #[test]
+    fn encrypted_packet_strict_prefixes_do_not_advance_replay_protection() {
+        let key = b"an example very very secret key.";
+        let protocol_id = 12;
+
+        for width in 0..=8 {
+            let sequence = if width == 0 { 0 } else { 1u64 << ((width - 1) * 8) };
+            let mut encoded = [0u8; NETCODE_MAX_PACKET_BYTES];
+            let len = Packet::Payload(&[42])
+                .encode(&mut encoded, protocol_id, Some((sequence, key)))
+                .unwrap();
+            assert_eq!(decode_prefix(encoded[0]).1, width);
+
+            let mut replay = ReplayProtection::new();
+            for prefix_len in 0..len {
+                let mut prefix = encoded[..prefix_len].to_vec();
+                assert!(
+                    Packet::decode(&mut prefix, protocol_id, Some(key), Some(&mut replay)).is_err(),
+                    "width {width}, prefix length {prefix_len}"
+                );
+                assert!(!replay.already_received(sequence));
+            }
+
+            let mut full = encoded[..len].to_vec();
+            assert_eq!(
+                Packet::decode(&mut full, protocol_id, Some(key), Some(&mut replay)).unwrap().0,
+                sequence
+            );
+            assert!(replay.already_received(sequence));
+        }
+    }
+
+    #[test]
+    fn oversized_sequence_widths_and_short_mac_are_rejected() {
+        let key = b"an example very very secret key.";
+        let protocol_id = 12;
+        let mut replay = ReplayProtection::new();
+
+        for width in 9..=15 {
+            let mut packet = vec![0; 1 + width + NETCODE_MAC_BYTES];
+            packet[0] = (width as u8) << 4 | PacketType::Payload as u8;
+            assert!(matches!(
+                Packet::decode(&mut packet, protocol_id, Some(key), Some(&mut replay)),
+                Err(NetcodeError::PacketTooSmall)
+            ));
+        }
+
+        let sequence = u64::MAX;
+        let mut encoded = [0u8; NETCODE_MAX_PACKET_BYTES];
+        let len = Packet::Disconnect.encode(&mut encoded, protocol_id, Some((sequence, key))).unwrap();
+        let mut short_mac = encoded[..len - 1].to_vec();
+        assert!(matches!(
+            Packet::decode(&mut short_mac, protocol_id, Some(key), Some(&mut replay)),
+            Err(NetcodeError::PacketTooSmall)
+        ));
+        assert!(!replay.already_received(sequence));
+    }
+
+    #[test]
+    fn max_sequence_authenticates_once() {
+        let key = b"an example very very secret key.";
+        let protocol_id = 12;
+        let sequence = u64::MAX;
+        let mut encoded = [0u8; NETCODE_MAX_PACKET_BYTES];
+        let len = Packet::Payload(&[42])
+            .encode(&mut encoded, protocol_id, Some((sequence, key)))
+            .unwrap();
+        let mut replay = ReplayProtection::new();
+
+        let mut corrupt = encoded[..len].to_vec();
+        corrupt[len - 1] ^= 1;
+        assert!(matches!(
+            Packet::decode(&mut corrupt, protocol_id, Some(key), Some(&mut replay)),
+            Err(NetcodeError::CryptoError)
+        ));
+        assert!(!replay.already_received(sequence));
+
+        let mut valid = encoded[..len].to_vec();
+        assert_eq!(
+            Packet::decode(&mut valid, protocol_id, Some(key), Some(&mut replay)).unwrap().0,
+            sequence
+        );
+        assert!(replay.already_received(sequence));
+
+        let mut duplicate = encoded[..len].to_vec();
+        assert!(matches!(
+            Packet::decode(&mut duplicate, protocol_id, Some(key), Some(&mut replay)),
+            Err(NetcodeError::DuplicatedSequence)
+        ));
+    }
+
+    #[test]
+    fn adversarial_datagrams_only_consume_replay_for_authenticated_packets() {
+        let key = b"an example very very secret key.";
+        let protocol_id = 12;
+        let mut low = ReplayProtection::new();
+        for sequence in [0, 1, 2, 699, 700] {
+            low.advance_sequence(sequence);
+        }
+        let mut top = ReplayProtection::new();
+        for sequence in [u64::MAX - 255, u64::MAX - 1] {
+            top.advance_sequence(sequence);
+        }
+        let windows = [ReplayProtection::new(), low, top];
+
+        let mut case = 0;
+        for_each_adversarial_datagram(|datagram| {
+            case += 1;
+            let first = datagram.first().copied();
+            let context = format!("case {case}, length {}, prefix {first:?}", datagram.len());
+
+            for window in &windows {
+                let mut replay = window.clone();
+                let before = format!("{replay:?}");
+                let mut bytes = datagram.to_vec();
+                match Packet::decode(&mut bytes, protocol_id, Some(key), Some(&mut replay)) {
+                    Ok((sequence, packet)) if matches!(packet, Packet::KeepAlive { .. } | Packet::Payload(_) | Packet::Disconnect) => {
+                        assert!(!window.already_received(sequence), "{context}");
+                        assert!(replay.already_received(sequence), "{context}");
+                    }
+                    Ok((sequence, packet)) => {
+                        if matches!(packet, Packet::ConnectionRequest { .. }) {
+                            assert_eq!(sequence, 0, "{context}");
+                        }
+                        assert_eq!(before, format!("{replay:?}"), "{context}");
+                    }
+                    Err(error) => {
+                        assert_eq!(before, format!("{replay:?}"), "{context}");
+                        if let Some(first) = first {
+                            let (packet_type, sequence_len) = decode_prefix(first);
+                            if packet_type > PacketType::Disconnect as u8 {
+                                assert!(matches!(error, NetcodeError::InvalidPacketType), "{context}: {error}");
+                            } else if packet_type != PacketType::ConnectionRequest as u8 && sequence_len > 8 {
+                                assert!(matches!(error, NetcodeError::PacketTooSmall), "{context}: {error}");
+                            }
+                        } else {
+                            assert!(matches!(error, NetcodeError::PacketTooSmall), "{context}: {error}");
+                        }
+                    }
+                }
+            }
+
+            let mut bytes = datagram.to_vec();
+            if let Ok((sequence, packet)) = Packet::decode(&mut bytes, protocol_id, None, None) {
+                assert!(matches!(packet, Packet::ConnectionRequest { .. }), "{context}");
+                assert_eq!(sequence, 0, "{context}");
+            }
+        });
+    }
+
+    #[test]
+    fn encoded_packet_corpus_round_trips_and_rejects_truncation_and_corruption() {
+        let key = b"an example very very secret key.";
+        let wrong_key = &[0x5a; NETCODE_KEY_BYTES];
+        let protocol_id = 12;
+
+        for_each_encoded_packet(protocol_id, key, |sequence, packet, encoded| {
+            let context = format!("{packet:?} at sequence {sequence}");
+            let protected = match packet {
+                Packet::KeepAlive { .. } | Packet::Payload(_) | Packet::Disconnect => true,
+                Packet::ConnectionRequest { .. } | Packet::ConnectionDenied | Packet::Challenge { .. } | Packet::Response { .. } => false,
+            };
+            let request = matches!(packet, Packet::ConnectionRequest { .. });
+
+            let mut replay = ReplayProtection::new();
+            let mut full = encoded.to_vec();
+            let (decoded_sequence, decoded) = Packet::decode(&mut full, protocol_id, Some(key), Some(&mut replay)).unwrap();
+            assert_eq!(decoded_sequence, sequence, "{context}");
+            assert_eq!(&decoded, packet, "{context}");
+            assert_eq!(replay.already_received(sequence), protected, "{context}");
+            if protected {
+                let mut duplicate = encoded.to_vec();
+                assert!(
+                    matches!(
+                        Packet::decode(&mut duplicate, protocol_id, Some(key), Some(&mut replay)),
+                        Err(NetcodeError::DuplicatedSequence)
+                    ),
+                    "{context}"
+                );
+            }
+
+            let empty = format!("{:?}", ReplayProtection::new());
+            let rejected = |bytes: &mut [u8], case: &str| {
+                let mut replay = ReplayProtection::new();
+                assert!(
+                    Packet::decode(bytes, protocol_id, Some(key), Some(&mut replay)).is_err(),
+                    "{context}: {case}"
+                );
+                assert_eq!(empty, format!("{replay:?}"), "{context}: {case}");
+            };
+
+            for prefix_len in 0..encoded.len() {
+                rejected(&mut encoded[..prefix_len].to_vec(), &format!("prefix length {prefix_len}"));
+            }
+
+            if request {
+                let mut keyless = encoded.to_vec();
+                assert!(matches!(
+                    Packet::decode(&mut keyless, protocol_id, None, None),
+                    Ok((0, Packet::ConnectionRequest { .. }))
+                ));
+                return;
+            }
+
+            for index in 0..encoded.len() {
+                let mut corrupt = encoded.to_vec();
+                corrupt[index] ^= 0x01;
+                rejected(&mut corrupt, &format!("bit flip at {index}"));
+                let mut corrupt = encoded.to_vec();
+                corrupt[index] ^= 0x80;
+                rejected(&mut corrupt, &format!("high bit flip at {index}"));
+            }
+
+            let mut replay = ReplayProtection::new();
+            assert!(
+                matches!(
+                    Packet::decode(&mut encoded.to_vec(), protocol_id, Some(wrong_key), Some(&mut replay)),
+                    Err(NetcodeError::CryptoError)
+                ),
+                "{context}: wrong key"
+            );
+            assert!(
+                matches!(
+                    Packet::decode(&mut encoded.to_vec(), protocol_id + 1, Some(key), Some(&mut replay)),
+                    Err(NetcodeError::CryptoError)
+                ),
+                "{context}: wrong protocol"
+            );
+            assert!(
+                matches!(
+                    Packet::decode(&mut encoded.to_vec(), protocol_id, None, Some(&mut replay)),
+                    Err(NetcodeError::UnavailablePrivateKey)
+                ),
+                "{context}: keyless"
+            );
+            assert_eq!(empty, format!("{replay:?}"), "{context}");
+        });
+    }
+
+    #[test]
+    fn authenticated_short_bodies_fail_without_consuming_replay() {
+        let key = b"an example very very secret key.";
+        let protocol_id = 12;
+
+        for sequence in [700, u64::MAX] {
+            let mut populated = ReplayProtection::new();
+            for received in [sequence - 255, sequence - 1] {
+                populated.advance_sequence(received);
+            }
+
+            for window in [ReplayProtection::new(), populated] {
+                for body_len in 0..8 {
+                    let mut replay = window.clone();
+                    let before = format!("{replay:?}");
+                    let mut short = encrypt_raw_packet(PacketType::KeepAlive, sequence, &[0; 8][..body_len], protocol_id, key);
+                    assert!(
+                        matches!(
+                            Packet::decode(&mut short, protocol_id, Some(key), Some(&mut replay)),
+                            Err(NetcodeError::IoError(_))
+                        ),
+                        "sequence {sequence}, body length {body_len}"
+                    );
+                    assert_eq!(before, format!("{replay:?}"), "sequence {sequence}, body length {body_len}");
+
+                    let mut valid = [0; NETCODE_MAX_PACKET_BYTES];
+                    let len = Packet::Payload(&[42])
+                        .encode(&mut valid, protocol_id, Some((sequence, key)))
+                        .unwrap();
+                    let mut duplicate = valid[..len].to_vec();
+                    assert_eq!(
+                        Packet::decode(&mut valid[..len], protocol_id, Some(key), Some(&mut replay)).unwrap(),
+                        (sequence, Packet::Payload(&[42]))
+                    );
+                    assert!(matches!(
+                        Packet::decode(&mut duplicate, protocol_id, Some(key), Some(&mut replay)),
+                        Err(NetcodeError::DuplicatedSequence)
+                    ));
+                    for received in [sequence - 255, sequence - 1] {
+                        assert_eq!(replay.already_received(received), window.already_received(received));
+                    }
+                }
+            }
+        }
+
+        for packet_type in [PacketType::Challenge as u8, PacketType::Response as u8] {
+            for body_len in 0..8 + NETCODE_CHALLENGE_TOKEN_BYTES {
+                let mut replay = ReplayProtection::new();
+                let before = format!("{replay:?}");
+                let mut short = encrypt_raw_packet(PacketType::from_u8(packet_type).unwrap(), 9, &vec![0; body_len], protocol_id, key);
+                assert!(
+                    matches!(
+                        Packet::decode(&mut short, protocol_id, Some(key), Some(&mut replay)),
+                        Err(NetcodeError::IoError(_))
+                    ),
+                    "body length {body_len}"
+                );
+                assert_eq!(before, format!("{replay:?}"));
+            }
+        }
     }
 
     #[test]
