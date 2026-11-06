@@ -302,6 +302,32 @@ mod tests {
     }
 
     #[test]
+    fn kind_without_excludes_resource_entities() {
+        use bevy_ecs::resource::IsResource;
+        #[derive(Component)]
+        struct Foo;
+
+        struct NotFoo;
+
+        impl Kind for NotFoo {
+            type Filter = Without<Foo>;
+        }
+
+        let mut world = World::new();
+        world.spawn(Foo);
+
+        // The bare filter matches only the resource entities a new `World` is seeded with.
+        let mut raw = world.query_filtered::<Entity, Without<Foo>>();
+        let resource_entities: Vec<Entity> = raw.iter(&world).collect();
+        assert!(!resource_entities.is_empty());
+        for entity in &resource_entities {
+            assert!(world.entity(*entity).contains::<IsResource>());
+        }
+
+        assert_eq!(world.run_system_once(count::<NotFoo>).unwrap(), 0);
+    }
+
+    #[test]
     fn kind_multi() {
         #[derive(Component)]
         struct Foo;

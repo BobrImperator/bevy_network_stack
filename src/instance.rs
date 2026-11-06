@@ -12,6 +12,7 @@ use bevy_ecs::change_detection::MaybeLocation;
 use bevy_ecs::component::Mutable;
 use bevy_ecs::query::{EcsAccessType, FilteredAccessSet};
 use bevy_ecs::relationship::RelationshipSourceCollection;
+use bevy_ecs::resource::IsResource;
 use bevy_ecs::{
     archetype::Archetype,
     change_detection::Tick,
@@ -247,13 +248,20 @@ impl<T: Kind> Borrow<Entity> for Instance<T> {
     }
 }
 
-unsafe impl<T: Kind> WorldQuery for Instance<T> {
-    type Fetch<'a> = <T::Filter as WorldQuery>::Fetch<'a>;
+/// What an [`Instance<T>`] matches: the [`Kind::Filter`] of `T`, excluding resource entities.
+///
+/// Since Bevy 0.19 each resource lives on its own entity tagged with [`IsResource`]. Without
+/// this exclusion, a kind whose filter only excludes components (such as `Without<Foo>`) also
+/// matches those resource entities.
+type KindQuery<T> = (<T as Kind>::Filter, Without<IsResource>);
 
-    type State = <T::Filter as WorldQuery>::State;
+unsafe impl<T: Kind> WorldQuery for Instance<T> {
+    type Fetch<'a> = <KindQuery<T> as WorldQuery>::Fetch<'a>;
+
+    type State = <KindQuery<T> as WorldQuery>::State;
 
     fn shrink_fetch<'wlong: 'wshort, 'wshort>(fetch: Self::Fetch<'wlong>) -> Self::Fetch<'wshort> {
-        <T::Filter as WorldQuery>::shrink_fetch(fetch)
+        <KindQuery<T> as WorldQuery>::shrink_fetch(fetch)
     }
 
     unsafe fn init_fetch<'w>(
@@ -262,10 +270,10 @@ unsafe impl<T: Kind> WorldQuery for Instance<T> {
         last_change_tick: Tick,
         change_tick: Tick,
     ) -> Self::Fetch<'w> {
-        <T::Filter as WorldQuery>::init_fetch(world, state, last_change_tick, change_tick)
+        <KindQuery<T> as WorldQuery>::init_fetch(world, state, last_change_tick, change_tick)
     }
 
-    const IS_DENSE: bool = <T::Filter as WorldQuery>::IS_DENSE;
+    const IS_DENSE: bool = <KindQuery<T> as WorldQuery>::IS_DENSE;
 
     unsafe fn set_archetype<'w>(
         fetch: &mut Self::Fetch<'w>,
@@ -273,30 +281,30 @@ unsafe impl<T: Kind> WorldQuery for Instance<T> {
         archetype: &'w Archetype,
         table: &'w Table,
     ) {
-        <T::Filter as WorldQuery>::set_archetype(fetch, state, archetype, table)
+        <KindQuery<T> as WorldQuery>::set_archetype(fetch, state, archetype, table)
     }
 
     unsafe fn set_table<'w>(fetch: &mut Self::Fetch<'w>, state: &Self::State, table: &'w Table) {
-        <T::Filter as WorldQuery>::set_table(fetch, state, table)
+        <KindQuery<T> as WorldQuery>::set_table(fetch, state, table)
     }
 
     fn update_component_access(state: &Self::State, access: &mut FilteredAccess) {
-        <T::Filter as WorldQuery>::update_component_access(state, access)
+        <KindQuery<T> as WorldQuery>::update_component_access(state, access)
     }
 
     fn get_state(components: &Components) -> Option<Self::State> {
-        <T::Filter as WorldQuery>::get_state(components)
+        <KindQuery<T> as WorldQuery>::get_state(components)
     }
 
     fn init_state(world: &mut World) -> Self::State {
-        <T::Filter as WorldQuery>::init_state(world)
+        <KindQuery<T> as WorldQuery>::init_state(world)
     }
 
     fn matches_component_set(
         state: &Self::State,
         set_contains_id: &impl Fn(ComponentId) -> bool,
     ) -> bool {
-        <T::Filter as WorldQuery>::matches_component_set(state, set_contains_id)
+        <KindQuery<T> as WorldQuery>::matches_component_set(state, set_contains_id)
     }
 
     fn init_nested_access(
@@ -305,7 +313,7 @@ unsafe impl<T: Kind> WorldQuery for Instance<T> {
         component_access_set: &mut FilteredAccessSet,
         world: UnsafeWorldCell,
     ) {
-        <T::Filter as WorldQuery>::init_nested_access(
+        <KindQuery<T> as WorldQuery>::init_nested_access(
             state,
             system_name,
             component_access_set,
@@ -314,7 +322,7 @@ unsafe impl<T: Kind> WorldQuery for Instance<T> {
     }
 
     fn update_archetypes(state: &mut Self::State, world: UnsafeWorldCell) {
-        <T::Filter as WorldQuery>::update_archetypes(state, world)
+        <KindQuery<T> as WorldQuery>::update_archetypes(state, world)
     }
 }
 
