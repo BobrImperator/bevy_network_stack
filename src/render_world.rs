@@ -219,7 +219,14 @@ fn encode(mut captures: ResMut<Captures>, render_device: Res<RenderDevice>) {
         let _ = render_device.poll(PollType::wait_indefinitely());
         r.recv().expect("Failed to receive the map_async message");
 
-        let buffer_bytes = buffer_slice.get_mapped_range().to_vec();
+        let buffer_bytes = match buffer_slice.get_mapped_range() {
+            Ok(view) => view.to_vec(),
+            Err(err) => {
+                capture_state.target_buffer.unmap();
+                bevy::log::error!("Failed to read the mapped capture buffer: {err}");
+                continue;
+            }
+        };
         capture_state.target_buffer.unmap();
 
         // We need to ensure that this works regardless of the image dimensions
