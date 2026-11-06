@@ -1,0 +1,46 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bartlomiej Dudzik <15948633+BobrImperator@users.noreply.github.com>
+Date: Tue, 27 Oct 2026 19:11:55 +0100
+Subject: [PATCH] renetcode: accept sequence-zero control packets (D6)
+
+D6. The encoder emits 17-byte sequence-zero `Disconnect` and
+`ConnectionDenied` packets, but `Packet::decode` and the server's
+`process_packet_internal` precheck required at least 18 bytes, so these valid
+packets were rejected.
+
+The decoder now requires only the prefix byte, and the server's duplicate
+length precheck is removed. The width and MAC guard still rejects every short
+encrypted packet.
+---
+ renetcode/src/packet.rs | 2 +-
+ renetcode/src/server.rs | 4 ----
+ 2 files changed, 1 insertion(+), 5 deletions(-)
+
+diff --git a/renetcode/src/packet.rs b/renetcode/src/packet.rs
+index f11dc88..7dc61b4 100644
+--- a/renetcode/src/packet.rs
++++ b/renetcode/src/packet.rs
+@@ -258,7 +258,7 @@ impl<'a> Packet<'a> {
+         private_key: Option<&[u8; 32]>,
+         replay_protection: Option<&mut ReplayProtection>,
+     ) -> Result<(u64, Self), NetcodeError> {
+-        if buffer.len() < 2 + NETCODE_MAC_BYTES {
++        if buffer.is_empty() {
+             return Err(NetcodeError::PacketTooSmall);
+         }
+ 
+diff --git a/renetcode/src/server.rs b/renetcode/src/server.rs
+index 6cb24f3..c0969dd 100644
+--- a/renetcode/src/server.rs
++++ b/renetcode/src/server.rs
+@@ -387,10 +387,6 @@ impl NetcodeServer {
+     }
+ 
+     fn process_packet_internal<'a, 's>(&'s mut self, addr: SocketAddr, buffer: &'a mut [u8]) -> Result<ServerResult<'a, 's>, NetcodeError> {
+-        if buffer.len() < 2 + NETCODE_MAC_BYTES {
+-            return Err(NetcodeError::PacketTooSmall);
+-        }
+-
+         // Handle connected client
+         if let Some((slot, client)) = find_client_mut_by_addr(&mut self.clients, addr) {
+             let (_, packet) = Packet::decode(

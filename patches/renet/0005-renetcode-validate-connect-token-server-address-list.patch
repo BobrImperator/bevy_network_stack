@@ -1,0 +1,79 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bartlomiej Dudzik <15948633+BobrImperator@users.noreply.github.com>
+Date: Tue, 27 Oct 2026 19:11:55 +0100
+Subject: [PATCH] renetcode: validate connect-token server address lists (D4)
+
+D4. `read_server_addresses` accepted a count of 0 or above 32 and skipped
+`NONE` entries, so a token without a first server address reached the
+`expect` in `NetcodeClient::new` and panicked.
+
+Counts outside 1..=32 and `NONE` entries are now rejected while reading, and
+`NetcodeClient::new` returns `TokenGenerationError::NoServerAddressAvailable`
+instead of panicking.
+---
+ renetcode/src/client.rs |  9 ++++++---
+ renetcode/src/token.rs  | 13 +++++--------
+ 2 files changed, 11 insertions(+), 11 deletions(-)
+
+diff --git a/renetcode/src/client.rs b/renetcode/src/client.rs
+index 888d89d..dcbeff3 100644
+--- a/renetcode/src/client.rs
++++ b/renetcode/src/client.rs
+@@ -1,8 +1,11 @@
+ use std::{error::Error, fmt, net::SocketAddr, time::Duration};
+ 
+ use crate::{
+-    packet::Packet, replay_protection::ReplayProtection, token::ConnectToken, NetcodeError, NETCODE_CHALLENGE_TOKEN_BYTES,
+-    NETCODE_KEY_BYTES, NETCODE_MAX_PACKET_BYTES, NETCODE_MAX_PAYLOAD_BYTES, NETCODE_SEND_RATE, NETCODE_USER_DATA_BYTES,
++    packet::Packet,
++    replay_protection::ReplayProtection,
++    token::{ConnectToken, TokenGenerationError},
++    NetcodeError, NETCODE_CHALLENGE_TOKEN_BYTES, NETCODE_KEY_BYTES, NETCODE_MAX_PACKET_BYTES, NETCODE_MAX_PAYLOAD_BYTES, NETCODE_SEND_RATE,
++    NETCODE_USER_DATA_BYTES,
+ };
+ 
+ /// The reason why a client is in error state
+@@ -108,7 +111,7 @@ impl NetcodeClient {
+             ClientAuthentication::Secure { connect_token } => connect_token,
+         };
+ 
+-        let server_addr = connect_token.server_addresses[0].expect("cannot create or deserialize a ConnectToken without a server address");
++        let server_addr = connect_token.server_addresses[0].ok_or(TokenGenerationError::NoServerAddressAvailable)?;
+ 
+         Ok(Self {
+             sequence: 0,
+diff --git a/renetcode/src/token.rs b/renetcode/src/token.rs
+index 850d9b3..35228a7 100644
+--- a/renetcode/src/token.rs
++++ b/renetcode/src/token.rs
+@@ -302,6 +302,10 @@ fn write_server_addresses(writer: &mut impl io::Write, server_addresses: &[Optio
+ fn read_server_addresses(src: &mut impl io::Read) -> Result<[Option<SocketAddr>; 32], io::Error> {
+     let mut server_addresses = [None; 32];
+     let num_server_addresses = read_u32(src)? as usize;
++    if !(1..=server_addresses.len()).contains(&num_server_addresses) {
++        return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid server address count"));
++    }
++
+     for server_address in server_addresses.iter_mut().take(num_server_addresses) {
+         let host_type = read_u8(src)?;
+         match host_type {
+@@ -319,18 +323,11 @@ fn read_server_addresses(src: &mut impl io::Read) -> Result<[Option<SocketAddr>;
+                 let addr = SocketAddr::new(IpAddr::V6(Ipv6Addr::from(ip)), port);
+                 *server_address = Some(addr);
+             }
+-            NETCODE_ADDRESS_NONE => {} // skip
++            NETCODE_ADDRESS_NONE => return Err(io::Error::new(io::ErrorKind::InvalidData, "missing server address")),
+             _ => return Err(io::Error::new(io::ErrorKind::InvalidData, "Unknown ip address type")),
+         }
+     }
+ 
+-    if server_addresses.is_empty() {
+-        return Err(io::Error::new(
+-            io::ErrorKind::InvalidData,
+-            "ConnectToken does not have a server address",
+-        ));
+-    }
+-
+     Ok(server_addresses)
+ }
+ 

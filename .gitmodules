@@ -1,0 +1,3 @@
+[submodule "upstream/renet"]
+	path = upstream/renet
+	url = https://github.com/lucaspoffo/renet.git

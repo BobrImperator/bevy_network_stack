@@ -1,0 +1,50 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bartlomiej Dudzik <15948633+BobrImperator@users.noreply.github.com>
+Date: Tue, 27 Oct 2026 19:11:55 +0100
+Subject: [PATCH] renetcode: check connect-token expiry arithmetic (D5)
+
+D5. The client computed the token lifetime as
+`expire_timestamp - create_timestamp`, which underflowed when a token expired
+before it was created.
+
+The subtraction now saturates, so such a token expires through the existing
+`ConnectTokenExpired` path. `ConnectToken::generate` added the lifetime to
+the current time unchecked; the expiry now uses checked addition, and an
+overflow returns a token-generation error.
+---
+ renetcode/src/client.rs | 5 ++++-
+ renetcode/src/token.rs  | 5 ++++-
+ 2 files changed, 8 insertions(+), 2 deletions(-)
+
+diff --git a/renetcode/src/client.rs b/renetcode/src/client.rs
+index dcbeff3..8554e1f 100644
+--- a/renetcode/src/client.rs
++++ b/renetcode/src/client.rs
+@@ -290,7 +290,10 @@ impl NetcodeClient {
+ 
+         match self.state {
+             ClientState::SendingConnectionRequest | ClientState::SendingConnectionResponse => {
+-                let expire_seconds = self.connect_token.expire_timestamp - self.connect_token.create_timestamp;
++                let expire_seconds = self
++                    .connect_token
++                    .expire_timestamp
++                    .saturating_sub(self.connect_token.create_timestamp);
+                 let connection_expired = (self.current_time - self.connect_start_time).as_secs() >= expire_seconds;
+                 if connection_expired {
+                     self.state = ClientState::Disconnected(DisconnectReason::ConnectTokenExpired);
+diff --git a/renetcode/src/token.rs b/renetcode/src/token.rs
+index 35228a7..32a1098 100644
+--- a/renetcode/src/token.rs
++++ b/renetcode/src/token.rs
+@@ -96,7 +96,10 @@ impl ConnectToken {
+         user_data: Option<&[u8; NETCODE_USER_DATA_BYTES]>,
+         private_key: &[u8; NETCODE_KEY_BYTES],
+     ) -> Result<Self, TokenGenerationError> {
+-        let expire_timestamp = current_time.as_secs() + expire_seconds;
++        let expire_timestamp = current_time
++            .as_secs()
++            .checked_add(expire_seconds)
++            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "connect token expiry overflows its timestamp"))?;
+ 
+         let private_connect_token = PrivateConnectToken::generate(client_id, timeout_seconds, server_addresses, user_data)?;
+         let mut private_data = [0u8; NETCODE_CONNECT_TOKEN_PRIVATE_BYTES];

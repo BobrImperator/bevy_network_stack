@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Usage: scripts/test <crate>
+# Runs the tests of the packages patched for <crate> on a clean checkout of the generated
+# <crate> branch. Callers set CARGO_TARGET_DIR; it defaults to target/ in this repository.
+# shellcheck source-path=SCRIPTDIR
+
+set -euo pipefail
+# shellcheck source=lib/cli.sh
+source "$(dirname "$0")/lib/cli.sh"
+# shellcheck source=lib/git.sh
+source "$(dirname "$0")/lib/git.sh"
+# shellcheck source=lib/workspace.sh
+source "$(dirname "$0")/lib/workspace.sh"
+# shellcheck source=lib/crate.sh
+source "$(dirname "$0")/lib/crate.sh"
+
+main() {
+	local crate root packages commit tree
+	crate=$(cli::crate_arg "$@")
+	git::isolate_env
+	root=$(workspace::root)
+	workspace::init_scratch
+
+	packages=$(crate::test_packages "$crate")
+	commit=$(git::branch_commit "$root" "$crate") ||
+		cli::die "branch $crate does not exist; run: scripts/apply $crate"
+	export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$root/target}"
+
+	tree="$scratch/tree"
+	git::checkout "$root" "$commit" "$tree"
+
+	echo "testing $crate $commit"
+	cd "$tree"
+	# shellcheck disable=SC2086
+	cargo test $packages
+}
+
+main "$@"

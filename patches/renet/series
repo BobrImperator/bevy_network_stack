@@ -1,0 +1,8 @@
+0001-renetcode-reject-oversized-sequence-widths-R1.patch
+0002-renetcode-track-the-whole-u64-range-in-replay-protec.patch
+0003-renetcode-parse-a-packet-before-consuming-its-replay.patch
+0004-renetcode-accept-sequence-zero-control-packets-D6.patch
+0005-renetcode-validate-connect-token-server-address-list.patch
+0006-renetcode-check-connect-token-expiry-arithmetic-D5.patch
+0007-renetcode-test-decoder-client-and-token-input-valida.patch
+0008-renetcode-harden-server-handshake-and-token-admissio.patch

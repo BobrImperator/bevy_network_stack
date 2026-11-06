@@ -1,0 +1,47 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bartlomiej Dudzik <15948633+BobrImperator@users.noreply.github.com>
+Date: Tue, 27 Oct 2026 19:11:55 +0100
+Subject: [PATCH] renetcode: parse a packet before consuming its replay
+ sequence (D1)
+
+D1. `Packet::decode` advanced replay protection after decryption but before
+`Packet::read`. An authenticated packet with a malformed body, such as a
+KeepAlive with 0-7 plaintext bytes, moved the replay window forward and then
+failed.
+
+The body is now parsed first, and the sequence is marked received only for a
+packet that decrypts and parses.
+---
+ renetcode/src/packet.rs | 7 ++++---
+ 1 file changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/renetcode/src/packet.rs b/renetcode/src/packet.rs
+index 6eadd38..f11dc88 100644
+--- a/renetcode/src/packet.rs
++++ b/renetcode/src/packet.rs
+@@ -281,21 +281,22 @@ impl<'a> Packet<'a> {
+                 (sequence, additional_data, src.position() as usize)
+             };
+ 
++            let apply_replay_protection = packet_type.apply_replay_protection();
+             if let Some(ref replay_protection) = replay_protection {
+-                if packet_type.apply_replay_protection() && replay_protection.already_received(sequence) {
++                if apply_replay_protection && replay_protection.already_received(sequence) {
+                     return Err(NetcodeError::DuplicatedSequence);
+                 }
+             }
+ 
+             dencrypted_in_place(&mut buffer[read_pos..], sequence, private_key, &aad)?;
++            let packet = Packet::read(packet_type, &buffer[read_pos..buffer.len() - NETCODE_MAC_BYTES])?;
+ 
+             if let Some(replay_protection) = replay_protection {
+-                if packet_type.apply_replay_protection() {
++                if apply_replay_protection {
+                     replay_protection.advance_sequence(sequence);
+                 }
+             }
+ 
+-            let packet = Packet::read(packet_type, &buffer[read_pos..buffer.len() - NETCODE_MAC_BYTES])?;
+             Ok((sequence, packet))
+         } else {
+             Err(NetcodeError::UnavailablePrivateKey)

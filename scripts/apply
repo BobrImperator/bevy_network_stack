@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Usage: scripts/apply <crate>
+# Rebuilds branch <crate> as the pinned upstream/<crate> revision plus one commit per
+# patches/<crate>/series entry. The branch is generated; never edit it by hand.
+# shellcheck source-path=SCRIPTDIR
+
+set -euo pipefail
+# shellcheck source=lib/cli.sh
+source "$(dirname "$0")/lib/cli.sh"
+# shellcheck source=lib/git.sh
+source "$(dirname "$0")/lib/git.sh"
+# shellcheck source=lib/workspace.sh
+source "$(dirname "$0")/lib/workspace.sh"
+# shellcheck source=lib/patch.sh
+source "$(dirname "$0")/lib/patch.sh"
+
+main() {
+	local crate root patches upstream base work
+	crate=$(cli::crate_arg "$@")
+	git::isolate_env
+	root=$(workspace::root)
+	workspace::init_scratch
+
+	patches="$root/patches/$crate"
+	upstream="$root/upstream/$crate"
+	[ -f "$patches/series" ] || cli::die "missing patches/$crate/series"
+	base=$(git::pinned_commit "$root" "$crate") || cli::die "upstream/$crate is not a submodule"
+	git::has_commit "$upstream" "$base" ||
+		cli::die "upstream/$crate lacks $base; run: git submodule update --init upstream/$crate"
+
+	work="$scratch/work"
+	git::checkout "$upstream" "$base" "$work"
+	patch::apply_series "$patches" "$work" "$scratch" "$crate" "$base"
+
+	git::publish_branch "$root" "$work" "$crate"
+	echo "$crate $(git::branch_commit "$root" "$crate")"
+}
+
+main "$@"
