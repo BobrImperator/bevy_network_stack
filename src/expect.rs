@@ -256,7 +256,7 @@ impl<T: WorldQuery> Clone for ExpectFetch<'_, T> {
 unsafe impl<T: QueryData> QueryData for Expect<T> {
     type ReadOnly = Expect<T::ReadOnly>;
 
-    const IS_READ_ONLY: bool = true;
+    const IS_READ_ONLY: bool = T::IS_READ_ONLY;
 
     const IS_ARCHETYPAL: bool = T::IS_ARCHETYPAL;
 
@@ -399,6 +399,23 @@ mod tests {
         w.spawn(A);
         w.run_system_once(|q: Query<(&A, Expect<&B>)>| for _ in q.iter() {})
             .unwrap();
+    }
+
+    #[test]
+    fn expect_mut_lens_keeps_write_access() {
+        #[derive(Component)]
+        struct Count(u32);
+
+        let mut w = World::default();
+        let e = w.spawn(Count(1)).id();
+        w.run_system_once(|mut q: Query<Expect<&mut Count>>| {
+            let mut lens = q.transmute_lens::<Option<&mut Count>>();
+            for mut count in lens.query().iter_mut().flatten() {
+                count.0 = 2;
+            }
+        })
+        .unwrap();
+        assert_eq!(w.get::<Count>(e).unwrap().0, 2);
     }
 
     #[test]
