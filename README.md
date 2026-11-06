@@ -119,6 +119,8 @@ Upstream: <https://github.com/jannik4/bevy_capture> at `3439c61595ef40e07a54d9de
 - `0002`: size the readback buffer rows by aligning `width * 4` bytes, as the copy and
   un-pad steps do, so widths that are a multiple of 64 but not 256 no longer produce
   over-long frames.
+- `0003`: runtime test in `tests/readback.rs` that captures a 320 by 2 headless target through
+  `CapturePlugin` and asserts the frame byte length and both rows; it needs a GPU adapter.
 
 ## License
 

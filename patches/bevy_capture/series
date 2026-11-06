@@ -1,2 +1,3 @@
 0001-Update-to-Bevy-0.20.patch
 0002-Align-the-readback-buffer-stride-on-bytes-not-pixels.patch
+0003-Add-a-runtime-test-of-the-readback-frame-size-and-rows.patch
