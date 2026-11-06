@@ -58,8 +58,11 @@ impl ExtractedCaptureState {
         let source_image = images.get(&source).unwrap();
         let size = source_image.texture_descriptor.size;
 
-        let padded_bytes_per_row =
-            RenderDevice::align_copy_bytes_per_row((size.width) as usize) * 4;
+        // Align the byte count (width * 4), not the pixel count. Aligning the
+        // pixel count then multiplying by 4 over-pads any width that is a
+        // multiple of 64 but not 256, desyncing the buffer stride from the
+        // copy/un-pad strides and corrupting the readback.
+        let padded_bytes_per_row = RenderDevice::align_copy_bytes_per_row(size.width as usize * 4);
         let target_buffer = render_device.create_buffer(&BufferDescriptor {
             label: None,
             size: padded_bytes_per_row as u64 * size.height as u64,
