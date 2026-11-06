@@ -193,6 +193,14 @@ pub trait BehaviorItem {
     ///
     /// Because of this, this method is useful to avoid unintentional transition overrides.
     fn has_transition(&self) -> bool;
+
+    /// Returns `true` if there is no pending [`Transition`] for this [`Behavior`].
+    ///
+    /// This is a convenience inverse of [`has_transition`](BehaviorItem::has_transition),
+    /// useful for guard clauses in systems that should skip entities with queued transitions.
+    fn ready(&self) -> bool {
+        !self.has_transition()
+    }
 }
 
 /// Query data for a [`Behavior`].
