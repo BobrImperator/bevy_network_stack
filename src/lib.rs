@@ -710,6 +710,9 @@ impl<T: Behavior> BehaviorMutItem<'_, '_, T> {
         }
     }
 
+    /// Pushes `next` above the current behavior. An `initial` push replays a restored stack
+    /// (see [`insert_restored`]); its states were admitted when the stack was first built, so the
+    /// replay does not ask [`Behavior::filter_next`] again.
     fn push(
         &mut self,
         instance: Instance<T>,
@@ -717,7 +720,7 @@ impl<T: Behavior> BehaviorMutItem<'_, '_, T> {
         initial: bool,
         commands: &mut Commands,
     ) -> bool {
-        if self.filter_next(&next) {
+        if initial || self.filter_next(&next) {
             let previous = {
                 swap(self.current.as_mut(), &mut next);
                 next
@@ -1087,6 +1090,27 @@ impl<T: Behavior> Default for Memory<T> {
             stack: Vec::default(),
         }
     }
+}
+
+/// Inserts `current` above the restored `stack` of paused behaviors, the first of which becomes
+/// the initial behavior.
+///
+/// This is the load path for a saved behavior stack: the [`transition`] system restores the stack
+/// the first time it sees the behavior added, so `current` can later stop back to the behavior
+/// beneath it. The replay skips [`Behavior::filter_next`]: a saved stack may hold a state its
+/// initial behavior can reach only through states that are no longer on the stack. The entity's
+/// behavior must not yet have been processed by [`transition`].
+pub fn insert_restored<T: Behavior>(
+    entity: &mut EntityWorldMut,
+    current: T,
+    stack: impl IntoIterator<Item = T>,
+) {
+    entity.insert((
+        current,
+        Memory {
+            stack: stack.into_iter().collect(),
+        },
+    ));
 }
 
 /// A convenient macro for implementation of [`Behavior::filter_next`].

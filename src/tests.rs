@@ -107,6 +107,24 @@ fn initial_load() {
     );
 }
 
+/// A restored stack replays without the transition filter: `C` is reachable from `A` only through
+/// `B`, which is not on the stack.
+#[test]
+fn restored_stack_skips_the_transition_filter() {
+    let mut app = app();
+    crate::insert_restored(&mut app.world_mut().spawn_empty(), C, [A]);
+    app.update();
+
+    assert_eq!(
+        app.world_mut()
+            .run_system_once(|q: Single<BehaviorRef<T>, (With<TA>, With<TC>)>| {
+                (q.previous().copied(), *q.current())
+            })
+            .unwrap(),
+        (Some(A), C)
+    );
+}
+
 #[test]
 fn push() {
     let mut app = app();
