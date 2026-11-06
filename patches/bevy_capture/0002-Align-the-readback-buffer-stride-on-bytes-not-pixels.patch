@@ -1,0 +1,40 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bartlomiej Dudzik <15948633+BobrImperator@users.noreply.github.com>
+Date: Fri, 6 Nov 2026 12:00:00 +0100
+Subject: [PATCH] Align the readback buffer stride on bytes, not pixels
+
+`ExtractedCaptureState::init` sized the readback buffer with rows of
+`align_copy_bytes_per_row(width) * 4` bytes: it aligned the pixel count
+to 256 and then multiplied by 4. `image_copy_pass` copies, and `encode`
+un-pads, with rows of `align_copy_bytes_per_row(width * 4)` bytes, so the
+buffer was larger than the copied rows for most widths.
+
+`encode` takes the whole buffer as the image when `width * 4` is already
+aligned. For a width that is a multiple of 64 but not of 256 (such as
+320 or 960) the image data therefore came out longer than
+`width * height * 4`, carrying the unused tail of the buffer into every
+encoded frame.
+
+Align `width * 4` bytes, as the copy and un-pad steps do.
+---
+ src/render_world.rs | 7 +++++--
+ 1 file changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/src/render_world.rs b/src/render_world.rs
+index 98f7ca1..2085220 100644
+--- a/src/render_world.rs
++++ b/src/render_world.rs
+@@ -58,8 +58,11 @@ impl ExtractedCaptureState {
+         let source_image = images.get(&source).unwrap();
+         let size = source_image.texture_descriptor.size;
+ 
+-        let padded_bytes_per_row =
+-            RenderDevice::align_copy_bytes_per_row((size.width) as usize) * 4;
++        // Align the byte count (width * 4), not the pixel count. Aligning the
++        // pixel count then multiplying by 4 over-pads any width that is a
++        // multiple of 64 but not 256, desyncing the buffer stride from the
++        // copy/un-pad strides and corrupting the readback.
++        let padded_bytes_per_row = RenderDevice::align_copy_bytes_per_row(size.width as usize * 4);
+         let target_buffer = render_device.create_buffer(&BufferDescriptor {
+             label: None,
+             size: padded_bytes_per_row as u64 * size.height as u64,

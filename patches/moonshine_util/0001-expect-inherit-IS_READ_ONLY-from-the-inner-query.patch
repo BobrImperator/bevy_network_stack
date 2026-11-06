@@ -1,0 +1,54 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bartlomiej Dudzik <15948633+BobrImperator@users.noreply.github.com>
+Date: Fri, 6 Nov 2026 12:00:00 +0100
+Subject: [PATCH] expect: inherit `IS_READ_ONLY` from the inner query
+
+`Expect<T>` declared `IS_READ_ONLY = true` for every `T`. Bevy uses the
+flag to decide whether a transmuted or joined query may take mutable
+access, so `Query<Expect<&mut T>>::transmute_lens::<Option<&mut T>>()`
+was rejected as asking for more access than the query holds, although
+`Expect<&mut T>` does register write access for `T`.
+
+Take the flag from `T`, as every other wrapper query does, and test that
+a mutable lens over `Expect<&mut T>` writes through.
+---
+ src/expect.rs | 19 ++++++++++++++++++-
+ 1 file changed, 18 insertions(+), 1 deletion(-)
+
+diff --git a/src/expect.rs b/src/expect.rs
+index d9c08e3..5362e81 100644
+--- a/src/expect.rs
++++ b/src/expect.rs
+@@ -256,7 +256,7 @@ impl<T: WorldQuery> Clone for ExpectFetch<'_, T> {
+ unsafe impl<T: QueryData> QueryData for Expect<T> {
+     type ReadOnly = Expect<T::ReadOnly>;
+ 
+-    const IS_READ_ONLY: bool = true;
++    const IS_READ_ONLY: bool = T::IS_READ_ONLY;
+ 
+     const IS_ARCHETYPAL: bool = T::IS_ARCHETYPAL;
+ 
+@@ -401,6 +401,23 @@ mod tests {
+             .unwrap();
+     }
+ 
++    #[test]
++    fn expect_mut_lens_keeps_write_access() {
++        #[derive(Component)]
++        struct Count(u32);
++
++        let mut w = World::default();
++        let e = w.spawn(Count(1)).id();
++        w.run_system_once(|mut q: Query<Expect<&mut Count>>| {
++            let mut lens = q.transmute_lens::<Option<&mut Count>>();
++            for mut count in lens.query().iter_mut().flatten() {
++                count.0 = 2;
++            }
++        })
++        .unwrap();
++        assert_eq!(w.get::<Count>(e).unwrap().0, 2);
++    }
++
+     #[test]
+     #[should_panic]
+     fn expect_require_panic() {

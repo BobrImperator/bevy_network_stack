@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bartlomiej Dudzik <15948633+BobrImperator@users.noreply.github.com>
+Date: Fri, 6 Nov 2026 12:00:00 +0100
+Subject: [PATCH] Add `BehaviorItem::ready()`
+
+Systems that must not override a queued transition guard on
+`!behavior.has_transition()`. Add `ready()` as the named inverse so those
+guards read as the condition they check. It is a provided method, so
+existing `BehaviorItem` implementations are unaffected.
+---
+ src/lib.rs | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/src/lib.rs b/src/lib.rs
+index 0d29b1e..a1d6290 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -193,6 +193,14 @@ pub trait BehaviorItem {
+     ///
+     /// Because of this, this method is useful to avoid unintentional transition overrides.
+     fn has_transition(&self) -> bool;
++
++    /// Returns `true` if there is no pending [`Transition`] for this [`Behavior`].
++    ///
++    /// This is a convenience inverse of [`has_transition`](BehaviorItem::has_transition),
++    /// useful for guard clauses in systems that should skip entities with queued transitions.
++    fn ready(&self) -> bool {
++        !self.has_transition()
++    }
+ }
+ 
+ /// Query data for a [`Behavior`].

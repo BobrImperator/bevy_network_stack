@@ -1,0 +1,166 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bartlomiej Dudzik <15948633+BobrImperator@users.noreply.github.com>
+Date: Fri, 6 Nov 2026 12:00:00 +0100
+Subject: [PATCH] instance: exclude resource entities from every `Instance<T>`
+ query
+
+Since Bevy 0.19 each resource is stored on its own entity tagged with
+`IsResource`. A kind whose filter only excludes components, such as
+`Without<Foo>`, therefore also matched those resource entities, so
+`Query<Instance<T>>` yielded engine entities that are not instances of
+`T`. The `kind_without` test worked around this by adding
+`Without<IsResource>` to its own filter; every downstream kind would need
+the same workaround.
+That test keeps its now redundant filter and comment, to keep this
+change to the query itself.
+
+Define `KindQuery<T> = (T::Filter, Without<IsResource>)` and delegate
+every `WorldQuery` item of `Instance<T>` to it, so `InstanceRef` and
+`InstanceMut`, which delegate through `Instance<T>`, exclude them too.
+Test that a bare `Without<Foo>` kind no longer counts resource entities.
+---
+ src/instance.rs | 34 +++++++++++++++++++++-------------
+ src/lib.rs      | 26 ++++++++++++++++++++++++++
+ 2 files changed, 47 insertions(+), 13 deletions(-)
+
+diff --git a/src/instance.rs b/src/instance.rs
+index 426d73c..aa3df0d 100644
+--- a/src/instance.rs
++++ b/src/instance.rs
+@@ -12,6 +12,7 @@ use bevy_ecs::change_detection::MaybeLocation;
+ use bevy_ecs::component::Mutable;
+ use bevy_ecs::query::{EcsAccessType, FilteredAccessSet};
+ use bevy_ecs::relationship::RelationshipSourceCollection;
++use bevy_ecs::resource::IsResource;
+ use bevy_ecs::{
+     archetype::Archetype,
+     change_detection::Tick,
+@@ -247,13 +248,20 @@ impl<T: Kind> Borrow<Entity> for Instance<T> {
+     }
+ }
+ 
++/// What an [`Instance<T>`] matches: the [`Kind::Filter`] of `T`, excluding resource entities.
++///
++/// Since Bevy 0.19 each resource lives on its own entity tagged with [`IsResource`]. Without
++/// this exclusion, a kind whose filter only excludes components (such as `Without<Foo>`) also
++/// matches those resource entities.
++type KindQuery<T> = (<T as Kind>::Filter, Without<IsResource>);
++
+ unsafe impl<T: Kind> WorldQuery for Instance<T> {
+-    type Fetch<'a> = <T::Filter as WorldQuery>::Fetch<'a>;
++    type Fetch<'a> = <KindQuery<T> as WorldQuery>::Fetch<'a>;
+ 
+-    type State = <T::Filter as WorldQuery>::State;
++    type State = <KindQuery<T> as WorldQuery>::State;
+ 
+     fn shrink_fetch<'wlong: 'wshort, 'wshort>(fetch: Self::Fetch<'wlong>) -> Self::Fetch<'wshort> {
+-        <T::Filter as WorldQuery>::shrink_fetch(fetch)
++        <KindQuery<T> as WorldQuery>::shrink_fetch(fetch)
+     }
+ 
+     unsafe fn init_fetch<'w>(
+@@ -262,10 +270,10 @@ unsafe impl<T: Kind> WorldQuery for Instance<T> {
+         last_change_tick: Tick,
+         change_tick: Tick,
+     ) -> Self::Fetch<'w> {
+-        <T::Filter as WorldQuery>::init_fetch(world, state, last_change_tick, change_tick)
++        <KindQuery<T> as WorldQuery>::init_fetch(world, state, last_change_tick, change_tick)
+     }
+ 
+-    const IS_DENSE: bool = <T::Filter as WorldQuery>::IS_DENSE;
++    const IS_DENSE: bool = <KindQuery<T> as WorldQuery>::IS_DENSE;
+ 
+     unsafe fn set_archetype<'w>(
+         fetch: &mut Self::Fetch<'w>,
+@@ -273,30 +281,30 @@ unsafe impl<T: Kind> WorldQuery for Instance<T> {
+         archetype: &'w Archetype,
+         table: &'w Table,
+     ) {
+-        <T::Filter as WorldQuery>::set_archetype(fetch, state, archetype, table)
++        <KindQuery<T> as WorldQuery>::set_archetype(fetch, state, archetype, table)
+     }
+ 
+     unsafe fn set_table<'w>(fetch: &mut Self::Fetch<'w>, state: &Self::State, table: &'w Table) {
+-        <T::Filter as WorldQuery>::set_table(fetch, state, table)
++        <KindQuery<T> as WorldQuery>::set_table(fetch, state, table)
+     }
+ 
+     fn update_component_access(state: &Self::State, access: &mut FilteredAccess) {
+-        <T::Filter as WorldQuery>::update_component_access(state, access)
++        <KindQuery<T> as WorldQuery>::update_component_access(state, access)
+     }
+ 
+     fn get_state(components: &Components) -> Option<Self::State> {
+-        <T::Filter as WorldQuery>::get_state(components)
++        <KindQuery<T> as WorldQuery>::get_state(components)
+     }
+ 
+     fn init_state(world: &mut World) -> Self::State {
+-        <T::Filter as WorldQuery>::init_state(world)
++        <KindQuery<T> as WorldQuery>::init_state(world)
+     }
+ 
+     fn matches_component_set(
+         state: &Self::State,
+         set_contains_id: &impl Fn(ComponentId) -> bool,
+     ) -> bool {
+-        <T::Filter as WorldQuery>::matches_component_set(state, set_contains_id)
++        <KindQuery<T> as WorldQuery>::matches_component_set(state, set_contains_id)
+     }
+ 
+     fn init_nested_access(
+@@ -305,7 +313,7 @@ unsafe impl<T: Kind> WorldQuery for Instance<T> {
+         component_access_set: &mut FilteredAccessSet,
+         world: UnsafeWorldCell,
+     ) {
+-        <T::Filter as WorldQuery>::init_nested_access(
++        <KindQuery<T> as WorldQuery>::init_nested_access(
+             state,
+             system_name,
+             component_access_set,
+@@ -314,7 +322,7 @@ unsafe impl<T: Kind> WorldQuery for Instance<T> {
+     }
+ 
+     fn update_archetypes(state: &mut Self::State, world: UnsafeWorldCell) {
+-        <T::Filter as WorldQuery>::update_archetypes(state, world)
++        <KindQuery<T> as WorldQuery>::update_archetypes(state, world)
+     }
+ }
+ 
+diff --git a/src/lib.rs b/src/lib.rs
+index 04a352a..77556d9 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -301,6 +301,32 @@ mod tests {
+         assert_eq!(world.run_system_once(count::<NotFoo>).unwrap(), 0);
+     }
+ 
++    #[test]
++    fn kind_without_excludes_resource_entities() {
++        use bevy_ecs::resource::IsResource;
++        #[derive(Component)]
++        struct Foo;
++
++        struct NotFoo;
++
++        impl Kind for NotFoo {
++            type Filter = Without<Foo>;
++        }
++
++        let mut world = World::new();
++        world.spawn(Foo);
++
++        // The bare filter matches only the resource entities a new `World` is seeded with.
++        let mut raw = world.query_filtered::<Entity, Without<Foo>>();
++        let resource_entities: Vec<Entity> = raw.iter(&world).collect();
++        assert!(!resource_entities.is_empty());
++        for entity in &resource_entities {
++            assert!(world.entity(*entity).contains::<IsResource>());
++        }
++
++        assert_eq!(world.run_system_once(count::<NotFoo>).unwrap(), 0);
++    }
++
+     #[test]
+     fn kind_multi() {
+         #[derive(Component)]

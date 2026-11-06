@@ -1,3 +1,15 @@
 [submodule "upstream/renet"]
 	path = upstream/renet
 	url = https://github.com/lucaspoffo/renet.git
+[submodule "upstream/moonshine_behavior"]
+	path = upstream/moonshine_behavior
+	url = https://github.com/Zeenobit/moonshine_behavior.git
+[submodule "upstream/moonshine_kind"]
+	path = upstream/moonshine_kind
+	url = https://github.com/Zeenobit/moonshine_kind.git
+[submodule "upstream/moonshine_util"]
+	path = upstream/moonshine_util
+	url = https://github.com/Zeenobit/moonshine_util.git
+[submodule "upstream/bevy_capture"]
+	path = upstream/bevy_capture
+	url = https://github.com/jannik4/bevy_capture

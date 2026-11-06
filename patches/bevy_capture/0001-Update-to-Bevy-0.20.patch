@@ -1,0 +1,56 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bartlomiej Dudzik <15948633+BobrImperator@users.noreply.github.com>
+Date: Fri, 6 Nov 2026 12:00:00 +0100
+Subject: [PATCH] Update to Bevy 0.20
+
+Require bevy 0.20 with the same feature list. wgpu 30, which Bevy 0.20
+uses, makes `BufferSlice::get_mapped_range()` return a `Result`; when the
+mapped range cannot be read, unmap the buffer, log the error and skip the
+frame instead of panicking.
+---
+ Cargo.toml          | 4 ++--
+ src/render_world.rs | 9 ++++++++-
+ 2 files changed, 10 insertions(+), 3 deletions(-)
+
+diff --git a/Cargo.toml b/Cargo.toml
+index 7afb296..85af61d 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -15,7 +15,7 @@ mp4_ffmpeg_cli = ["dep:tempdir"]
+ mp4_ffmpeg_cli_pipe = ["dep:wait-timeout"]
+ 
+ [dependencies]
+-bevy = { version = "0.19.0", default-features = false, features = [
++bevy = { version = "0.20.0", default-features = false, features = [
+     "bevy_image",
+     "bevy_render",
+     "bevy_core_pipeline",
+@@ -37,7 +37,7 @@ tempdir = { version = "0.3.7", optional = true }
+ wait-timeout = { version = "0.2.1", optional = true }
+ 
+ [dev-dependencies]
+-bevy = "0.19.0"
++bevy = "0.20.0"
+ 
+ [package.metadata.docs.rs]
+ all-features = true
+diff --git a/src/render_world.rs b/src/render_world.rs
+index f8a25e7..98f7ca1 100644
+--- a/src/render_world.rs
++++ b/src/render_world.rs
+@@ -219,7 +219,14 @@ fn encode(mut captures: ResMut<Captures>, render_device: Res<RenderDevice>) {
+         let _ = render_device.poll(PollType::wait_indefinitely());
+         r.recv().expect("Failed to receive the map_async message");
+ 
+-        let buffer_bytes = buffer_slice.get_mapped_range().to_vec();
++        let buffer_bytes = match buffer_slice.get_mapped_range() {
++            Ok(view) => view.to_vec(),
++            Err(err) => {
++                capture_state.target_buffer.unmap();
++                bevy::log::error!("Failed to read the mapped capture buffer: {err}");
++                continue;
++            }
++        };
+         capture_state.target_buffer.unmap();
+ 
+         // We need to ensure that this works regardless of the image dimensions

@@ -1,0 +1,102 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bartlomiej Dudzik <15948633+BobrImperator@users.noreply.github.com>
+Date: Fri, 6 Nov 2026 12:00:00 +0100
+Subject: [PATCH] Add `insert_restored()` and replay a restored stack without
+ `filter_next`
+
+A saved behavior is loaded by inserting the current state together with
+its `Memory` stack; `transition` then replays the stack as initial
+pushes. Each replayed push still asked `Behavior::filter_next`, so a
+saved stack whose current state is reachable from the state below it only
+through states that have since stopped (`A -> B -> C`, saved as `[A]`
+with `C` current) was rejected on load.
+
+Skip the filter for initial pushes, since those states were admitted when
+the stack was first built, and add `insert_restored()` as the public way
+to insert a restored stack, as `Memory` is private. Test that `[A]` with
+`C` current restores to `A` paused under `C`.
+---
+ src/lib.rs   | 26 +++++++++++++++++++++++++-
+ src/tests.rs | 18 ++++++++++++++++++
+ 2 files changed, 43 insertions(+), 1 deletion(-)
+
+diff --git a/src/lib.rs b/src/lib.rs
+index a1d6290..72ada9f 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -710,6 +710,9 @@ impl<T: Behavior> BehaviorMutItem<'_, '_, T> {
+         }
+     }
+ 
++    /// Pushes `next` above the current behavior. An `initial` push replays a restored stack
++    /// (see [`insert_restored`]); its states were admitted when the stack was first built, so the
++    /// replay does not ask [`Behavior::filter_next`] again.
+     fn push(
+         &mut self,
+         instance: Instance<T>,
+@@ -717,7 +720,7 @@ impl<T: Behavior> BehaviorMutItem<'_, '_, T> {
+         initial: bool,
+         commands: &mut Commands,
+     ) -> bool {
+-        if self.filter_next(&next) {
++        if initial || self.filter_next(&next) {
+             let previous = {
+                 swap(self.current.as_mut(), &mut next);
+                 next
+@@ -1089,6 +1092,27 @@ impl<T: Behavior> Default for Memory<T> {
+     }
+ }
+ 
++/// Inserts `current` above the restored `stack` of paused behaviors, the first of which becomes
++/// the initial behavior.
++///
++/// This is the load path for a saved behavior stack: the [`transition`] system restores the stack
++/// the first time it sees the behavior added, so `current` can later stop back to the behavior
++/// beneath it. The replay skips [`Behavior::filter_next`]: a saved stack may hold a state its
++/// initial behavior can reach only through states that are no longer on the stack. The entity's
++/// behavior must not yet have been processed by [`transition`].
++pub fn insert_restored<T: Behavior>(
++    entity: &mut EntityWorldMut,
++    current: T,
++    stack: impl IntoIterator<Item = T>,
++) {
++    entity.insert((
++        current,
++        Memory {
++            stack: stack.into_iter().collect(),
++        },
++    ));
++}
++
+ /// A convenient macro for implementation of [`Behavior::filter_next`].
+ ///
+ /// # Usage
+diff --git a/src/tests.rs b/src/tests.rs
+index fea31a0..d06a005 100644
+--- a/src/tests.rs
++++ b/src/tests.rs
+@@ -107,6 +107,24 @@ fn initial_load() {
+     );
+ }
+ 
++/// A restored stack replays without the transition filter: `C` is reachable from `A` only through
++/// `B`, which is not on the stack.
++#[test]
++fn restored_stack_skips_the_transition_filter() {
++    let mut app = app();
++    crate::insert_restored(&mut app.world_mut().spawn_empty(), C, [A]);
++    app.update();
++
++    assert_eq!(
++        app.world_mut()
++            .run_system_once(|q: Single<BehaviorRef<T>, (With<TA>, With<TC>)>| {
++                (q.previous().copied(), *q.current())
++            })
++            .unwrap(),
++        (Some(A), C)
++    );
++}
++
+ #[test]
+ fn push() {
+     let mut app = app();
