@@ -14,7 +14,7 @@ categories = ["game-development", "multimedia::audio"]
 
 [dependencies]
 log = "0.4"
-firewheel = { git = "https://github.com/smashedbanan/Firewheel", rev = "431c6f08c69dd700a7c1c8f11de086cf1ba73cd8", default-features = false, features = [
+firewheel = { git = "https://github.com/BobrImperator/bevy_network_stack", rev = "6ce02b88e93c8dd7367c3a6fd428f0ddc3c71b16", default-features = false, features = [
   "std",
 ] }
 js-sys = { version = "0.3.77", default-features = false }
