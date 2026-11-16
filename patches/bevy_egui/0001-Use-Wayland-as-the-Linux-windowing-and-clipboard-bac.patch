@@ -3,193 +3,120 @@ From: Bartlomiej Dudzik <15948633+BobrImperator@users.noreply.github.com>
 Date: Mon, 16 Nov 2026 12:00:00 +0100
 Subject: [PATCH] Use Wayland as the Linux windowing and clipboard backend
 
-`bevy_winit` was a default-features dependency, so its default `x11`
-feature pulled the X11 backend (`x11rb`, `x11-dl`) into every
-application that depends on bevy_egui. `manage_clipboard` also pulled
-`arboard`, whose Linux clipboard always links `x11rb`, even with its
-`wayland-data-control` feature.
+`bevy_winit`'s default `x11` feature pulled the X11 backend (`x11rb`,
+`x11-dl`) into every Linux application that depends on bevy_egui.
+`manage_clipboard` also pulled `arboard`, whose Linux clipboard always
+links `x11rb`, even with its `wayland-data-control` feature.
 
-Select no `bevy_winit` default features. On Linux and the BSDs, select
-`bevy_winit`'s `wayland` backend instead, so bevy_egui still compiles
-with a backend on those targets; elsewhere winit needs no backend
-feature.
+On Linux, select `bevy_winit` without default features and with its
+`wayland` backend, and do not select `arboard` or `thread_local`.
+`smithay-clipboard`, which bevy_egui already tries first when the
+window runs on Wayland, becomes the only clipboard there, and the
+arboard fallback compiles out. Copying an image on Linux logs the error
+the smithay path already logged and does nothing.
 
-On Linux and the BSDs, `smithay-clipboard`, which bevy_egui already
-tries first, becomes the only clipboard: `arboard` and `thread_local`
-are selected only on the other native targets, and the arboard fallback
-paths compile only there. Copying an image there logs the error the
-smithay path already logged and does nothing.
+Every other target, the BSDs included, keeps upstream's `bevy_winit`
+default features and clipboard selection unchanged.
 ---
- Cargo.toml |  6 +++--
- src/lib.rs | 69 ++++++++++++++++++++++++++++++++++++++++++------------
- 2 files changed, 58 insertions(+), 17 deletions(-)
+ Cargo.toml |  9 +++++++--
+ src/lib.rs | 17 +++++++++++++----
+ 2 files changed, 20 insertions(+), 6 deletions(-)
 
 diff --git a/Cargo.toml b/Cargo.toml
-index 5d4cb7b..0259ff2 100644
+index 5d4cb7bc..3d28dc12 100644
 --- a/Cargo.toml
 +++ b/Cargo.toml
-@@ -105,7 +105,7 @@ bevy_reflect = { version = "0.20.0" }
+@@ -105,7 +105,6 @@ bevy_reflect = { version = "0.20.0" }
  bevy_time = { version = "0.20.0" }
  bevy_shape = { version = "0.20.0" }
  bevy_window = { version = "0.20.0" }
 -bevy_winit = { version = "0.20.0" }
-+bevy_winit = { version = "0.20.0", default-features = false }
  bevy_utils = { version = "0.20.0", features = ["debug"] }
  winit = { version = "0.30", default-features = false }
  
-@@ -134,11 +134,13 @@ bevy_ui_render = { version = "0.20.0", optional = true }
+@@ -133,8 +132,14 @@ bevy_ui_render = { version = "0.20.0", optional = true }
+ # `picking` feature
  bevy_picking = { version = "0.20.0", optional = true, features = ["mesh_picking"] }
  
++# Linux uses only the Wayland windowing backend; other targets keep `bevy_winit`'s defaults.
++[target.'cfg(target_os = "linux")'.dependencies]
++bevy_winit = { version = "0.20.0", default-features = false, features = ["wayland"] }
++[target.'cfg(not(target_os = "linux"))'.dependencies]
++bevy_winit = { version = "0.20.0" }
++
  # `manage_clipboard` feature
 -[target.'cfg(not(any(target_arch = "wasm32", target_os = "android")))'.dependencies]
-+[target.'cfg(not(any(target_arch = "wasm32", target_os = "android", target_os="linux", target_os="dragonfly", target_os="freebsd", target_os="netbsd", target_os="openbsd")))'.dependencies]
++[target.'cfg(not(any(target_arch = "wasm32", target_os = "android", target_os = "linux")))'.dependencies]
  arboard = { version = "3.2.0", optional = true }
  thread_local = { version = "1.1.0", optional = true }
  [target.'cfg(any(target_os="linux", target_os="dragonfly", target_os="freebsd", target_os="netbsd", target_os="openbsd"))'.dependencies]
- smithay-clipboard = { version = "0.7.2", optional = true }
-+# The windowing backend on these targets: Wayland, which `smithay-clipboard` already speaks.
-+bevy_winit = { version = "0.20.0", default-features = false, features = ["wayland"] }
- 
- [dev-dependencies]
- version-sync = "0.9.5"
 diff --git a/src/lib.rs b/src/lib.rs
-index ccb81df..a58573b 100644
+index ccb81df6..b392b7d2 100644
 --- a/src/lib.rs
 +++ b/src/lib.rs
-@@ -185,7 +185,15 @@ use bevy_render::{
+@@ -185,7 +185,7 @@ use bevy_render::{
  use output::process_output_system;
  #[cfg(all(
      feature = "manage_clipboard",
 -    not(any(target_arch = "wasm32", target_os = "android"))
-+    not(any(
-+        target_arch = "wasm32",
-+        target_os = "android",
-+        target_os = "linux",
-+        target_os = "dragonfly",
-+        target_os = "freebsd",
-+        target_os = "netbsd",
-+        target_os = "openbsd"
-+    ))
++    not(any(target_arch = "wasm32", target_os = "android", target_os = "linux"))
  ))]
  use std::cell::{RefCell, RefMut};
  #[cfg(all(
-@@ -495,7 +503,14 @@ pub struct EguiFullOutput(pub Option<egui::FullOutput>);
+@@ -495,7 +495,7 @@ pub struct EguiFullOutput(pub Option<egui::FullOutput>);
  #[cfg(all(feature = "manage_clipboard", not(target_os = "android")))]
  #[derive(Default, Resource)]
  pub struct EguiClipboard {
 -    #[cfg(not(target_arch = "wasm32"))]
-+    #[cfg(not(any(
-+        target_arch = "wasm32",
-+        target_os = "linux",
-+        target_os = "dragonfly",
-+        target_os = "freebsd",
-+        target_os = "netbsd",
-+        target_os = "openbsd"
-+    )))]
++    #[cfg(not(any(target_arch = "wasm32", target_os = "linux")))]
      clipboard: thread_local::ThreadLocal<Option<RefCell<arboard::Clipboard>>>,
      #[cfg(all(
          any(
-@@ -1424,7 +1439,7 @@ impl EguiClipboard {
- 
-     #[cfg(not(target_arch = "wasm32"))]
-     fn set_text_impl(&mut self, contents: &str) {
--        // Try wayland first
-+        // On Linux and the BSDs, smithay (Wayland) is the only clipboard; arboard serves the rest.
-         #[cfg(all(
-             any(
-                 target_os = "linux",
-@@ -1438,9 +1453,15 @@ impl EguiClipboard {
-         if let Some(wayland_clipboard) = &self.wayland_clipboard {
-             let wayland_clipboard = wayland_clipboard.lock().unwrap();
-             wayland_clipboard.store(contents);
--            return;
+@@ -1441,6 +1441,8 @@ impl EguiClipboard {
+             return;
          }
  
-+        #[cfg(not(any(
-+            target_os = "linux",
-+            target_os = "dragonfly",
-+            target_os = "freebsd",
-+            target_os = "netbsd",
-+            target_os = "openbsd"
-+        )))]
++        // On Linux, smithay (Wayland) is the only clipboard: arboard links X11.
++        #[cfg(not(target_os = "linux"))]
          if let Some(mut clipboard) = self.get()
              && let Err(err) = clipboard.set_text(contents.to_owned())
          {
-@@ -1455,7 +1476,7 @@ impl EguiClipboard {
- 
-     #[cfg(not(target_arch = "wasm32"))]
-     fn get_text_impl(&mut self) -> Option<String> {
--        // Try wayland first
-+        // On Linux and the BSDs, smithay (Wayland) is the only clipboard; arboard serves the rest.
-         #[cfg(all(
-             any(
-                 target_os = "linux",
-@@ -1477,6 +1498,13 @@ impl EguiClipboard {
+@@ -1477,6 +1479,8 @@ impl EguiClipboard {
              };
          }
  
-+        #[cfg(not(any(
-+            target_os = "linux",
-+            target_os = "dragonfly",
-+            target_os = "freebsd",
-+            target_os = "netbsd",
-+            target_os = "openbsd"
-+        )))]
++        // On Linux, smithay (Wayland) is the only clipboard: arboard links X11.
++        #[cfg(not(target_os = "linux"))]
          if let Some(mut clipboard) = self.get() {
              match clipboard.get_text() {
                  Ok(contents) => return Some(contents),
-@@ -1495,8 +1523,8 @@ impl EguiClipboard {
+@@ -1495,7 +1499,10 @@ impl EguiClipboard {
      }
  
      #[cfg(not(target_arch = "wasm32"))]
 -    fn set_image_impl(&mut self, image: &egui::ColorImage) {
--        // Try wayland first
-+    fn set_image_impl(&mut self, _image: &egui::ColorImage) {
-+        // On Linux and the BSDs, smithay (Wayland) is the only clipboard; arboard serves the rest.
++    fn set_image_impl(
++        &mut self,
++        #[cfg_attr(target_os = "linux", allow(unused_variables))] image: &egui::ColorImage,
++    ) {
+         // Try wayland first
          #[cfg(all(
              any(
-                 target_os = "linux",
-@@ -1507,16 +1535,20 @@ impl EguiClipboard {
-             ),
-             feature = "manage_clipboard"
-         ))]
--        if self.wayland_clipboard.is_some() {
--            log::error!("Setting image to clipboard via smithay is not supported");
--            return;
--        }
-+        log::error!("Setting image to clipboard via smithay is not supported");
+@@ -1512,6 +1519,8 @@ impl EguiClipboard {
+             return;
+         }
  
-+        #[cfg(not(any(
-+            target_os = "linux",
-+            target_os = "dragonfly",
-+            target_os = "freebsd",
-+            target_os = "netbsd",
-+            target_os = "openbsd"
-+        )))]
++        // On Linux, smithay (Wayland) is the only clipboard: arboard links X11.
++        #[cfg(not(target_os = "linux"))]
          if let Some(mut clipboard) = self.get()
              && let Err(err) = clipboard.set_image(arboard::ImageData {
--                width: image.width(),
--                height: image.height(),
--                bytes: std::borrow::Cow::Borrowed(bytemuck::cast_slice(&image.pixels)),
-+                width: _image.width(),
-+                height: _image.height(),
-+                bytes: std::borrow::Cow::Borrowed(bytemuck::cast_slice(&_image.pixels)),
-             })
-         {
-             log::error!("Failed to set clipboard contents: {:?}", err);
-@@ -1528,7 +1560,14 @@ impl EguiClipboard {
+                 width: image.width(),
+@@ -1528,7 +1537,7 @@ impl EguiClipboard {
          self.clipboard.set_image(image);
      }
  
 -    #[cfg(not(target_arch = "wasm32"))]
-+    #[cfg(not(any(
-+        target_arch = "wasm32",
-+        target_os = "linux",
-+        target_os = "dragonfly",
-+        target_os = "freebsd",
-+        target_os = "netbsd",
-+        target_os = "openbsd"
-+    )))]
++    #[cfg(not(any(target_arch = "wasm32", target_os = "linux")))]
      fn get(&self) -> Option<RefMut<'_, arboard::Clipboard>> {
          self.clipboard
              .get_or(|| {

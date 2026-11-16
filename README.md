@@ -139,11 +139,11 @@ Upstream: <https://github.com/vladbat00/bevy_egui> at `c6d5cdb9b16df708a270e176d
 (v0.43.1, Bevy 0.20). `scripts/test` runs the library tests only: the `winit_tests` target opens a
 window.
 
-- `0001`: on Linux and the BSDs, select `bevy_winit`'s `wayland` backend instead of its default
-  `x11`, and make `smithay-clipboard` the only clipboard there: `arboard`, whose Linux clipboard
-  always links `x11rb`, is selected only on the other native targets. A Wayland-only build no
-  longer pulls `x11rb` and `x11-dl`; copying an image to the clipboard on Linux logs an error
-  and does nothing, as the smithay path already did.
+- `0001`: on Linux, select `bevy_winit`'s `wayland` backend instead of its default `x11`, and
+  make `smithay-clipboard` the only clipboard there: `arboard`, whose Linux clipboard always
+  links `x11rb`, is not selected on Linux. A Linux build no longer pulls `x11rb` and `x11-dl`;
+  copying an image to the clipboard on Linux logs an error and does nothing, as the smithay path
+  already did. Every other target, the BSDs included, keeps upstream's backend and clipboard.
 
 ## License
 
