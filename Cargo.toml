@@ -80,7 +80,6 @@ features = [
   "bevy_render",
   "bevy_asset",
   "bevy_log",
-  "x11",
 ]
 
 [package.metadata.docs.rs]
