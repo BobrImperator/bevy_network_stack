@@ -185,7 +185,7 @@ use bevy_render::{
 use output::process_output_system;
 #[cfg(all(
     feature = "manage_clipboard",
-    not(any(target_arch = "wasm32", target_os = "android"))
+    not(any(target_arch = "wasm32", target_os = "android", target_os = "linux"))
 ))]
 use std::cell::{RefCell, RefMut};
 #[cfg(all(
@@ -495,7 +495,7 @@ pub struct EguiFullOutput(pub Option<egui::FullOutput>);
 #[cfg(all(feature = "manage_clipboard", not(target_os = "android")))]
 #[derive(Default, Resource)]
 pub struct EguiClipboard {
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(any(target_arch = "wasm32", target_os = "linux")))]
     clipboard: thread_local::ThreadLocal<Option<RefCell<arboard::Clipboard>>>,
     #[cfg(all(
         any(
@@ -1441,6 +1441,8 @@ impl EguiClipboard {
             return;
         }
 
+        // On Linux, smithay (Wayland) is the only clipboard: arboard links X11.
+        #[cfg(not(target_os = "linux"))]
         if let Some(mut clipboard) = self.get()
             && let Err(err) = clipboard.set_text(contents.to_owned())
         {
@@ -1477,6 +1479,8 @@ impl EguiClipboard {
             };
         }
 
+        // On Linux, smithay (Wayland) is the only clipboard: arboard links X11.
+        #[cfg(not(target_os = "linux"))]
         if let Some(mut clipboard) = self.get() {
             match clipboard.get_text() {
                 Ok(contents) => return Some(contents),
@@ -1495,7 +1499,10 @@ impl EguiClipboard {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn set_image_impl(&mut self, image: &egui::ColorImage) {
+    fn set_image_impl(
+        &mut self,
+        #[cfg_attr(target_os = "linux", allow(unused_variables))] image: &egui::ColorImage,
+    ) {
         // Try wayland first
         #[cfg(all(
             any(
@@ -1512,6 +1519,8 @@ impl EguiClipboard {
             return;
         }
 
+        // On Linux, smithay (Wayland) is the only clipboard: arboard links X11.
+        #[cfg(not(target_os = "linux"))]
         if let Some(mut clipboard) = self.get()
             && let Err(err) = clipboard.set_image(arboard::ImageData {
                 width: image.width(),
@@ -1528,7 +1537,7 @@ impl EguiClipboard {
         self.clipboard.set_image(image);
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(any(target_arch = "wasm32", target_os = "linux")))]
     fn get(&self) -> Option<RefMut<'_, arboard::Clipboard>> {
         self.clipboard
             .get_or(|| {
