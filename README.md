@@ -1,7 +1,8 @@
 # bevy_network_stack
 
 Patched Rust crates: the renet networking stack plus the Bevy helper
-crates `moonshine_behavior`, `moonshine_kind`, `moonshine_util`, `bevy_capture` and `bevy_hanabi`. Each
+crates `moonshine_behavior`, `moonshine_kind`, `moonshine_util`, `bevy_capture`, `bevy_hanabi` and
+`bevy_egui`. Each
 upstream project is pinned as a submodule, and its fixes are kept as a reviewable series
 of patch mails. A generated branch per project holds the upstream history plus one commit
 per patch, so Cargo can depend on it through a git `rev`.
@@ -29,7 +30,7 @@ per patch, so Cargo can depend on it through a git `rev`.
   `domain::function`: `cli`, `git`, `workspace`, `patch` and `crate`. They are sourced and
   have no side effects until `main` calls them.
 - `<crate>` branches (`renet`, `moonshine_behavior`, `moonshine_kind`, `moonshine_util`,
-  `bevy_capture`, `bevy_hanabi`): generated output of `scripts/apply`. Never edit them by
+  `bevy_capture`, `bevy_hanabi`, `bevy_egui`): generated output of `scripts/apply`. Never edit them by
   hand; change the patches and regenerate.
 
 ## Update flow
@@ -132,10 +133,22 @@ which needs the system `fontconfig` library and its `pkg-config` file.
 - `0001`: drop `x11` from the `[dependencies.bevy]` features, so a consuming application picks its
   own windowing backend and a Wayland-only build no longer pulls `x11rb` and `x11-dl`.
 
+### bevy_egui
+
+Upstream: <https://github.com/vladbat00/bevy_egui> at `c6d5cdb9b16df708a270e176db012953e24332ef`
+(v0.43.1, Bevy 0.20). `scripts/test` runs the library tests only: the `winit_tests` target opens a
+window.
+
+- `0001`: on Linux and the BSDs, select `bevy_winit`'s `wayland` backend instead of its default
+  `x11`, and make `smithay-clipboard` the only clipboard there: `arboard`, whose Linux clipboard
+  always links `x11rb`, is selected only on the other native targets. A Wayland-only build no
+  longer pulls `x11rb` and `x11-dl`; copying an image to the clipboard on Linux logs an error
+  and does nothing, as the smithay path already did.
+
 ## License
 
 Upstream renet is dual-licensed under MIT and Apache-2.0; see `LICENSE-MIT` and
 `LICENSE-APACHE`. The patches and scripts in this repository are under the same terms.
-Upstream bevy_capture and bevy_hanabi are under MIT or Apache-2.0, and upstream moonshine_behavior,
+Upstream bevy_capture and bevy_hanabi are under MIT or Apache-2.0, upstream bevy_egui is under MIT, and upstream moonshine_behavior,
 moonshine_kind and moonshine_util are under MIT; see the `LICENSE` files in their
 submodules.

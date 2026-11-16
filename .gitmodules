@@ -16,3 +16,6 @@
 [submodule "upstream/bevy_hanabi"]
 	path = upstream/bevy_hanabi
 	url = https://github.com/djeedai/bevy_hanabi
+[submodule "upstream/bevy_egui"]
+	path = upstream/bevy_egui
+	url = https://github.com/vladbat00/bevy_egui
