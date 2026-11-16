@@ -1,7 +1,7 @@
 # bevy_network_stack
 
 Patched Rust crates: the renet networking stack plus the Bevy helper
-crates `moonshine_behavior`, `moonshine_kind`, `moonshine_util` and `bevy_capture`. Each
+crates `moonshine_behavior`, `moonshine_kind`, `moonshine_util`, `bevy_capture` and `bevy_hanabi`. Each
 upstream project is pinned as a submodule, and its fixes are kept as a reviewable series
 of patch mails. A generated branch per project holds the upstream history plus one commit
 per patch, so Cargo can depend on it through a git `rev`.
@@ -29,7 +29,7 @@ per patch, so Cargo can depend on it through a git `rev`.
   `domain::function`: `cli`, `git`, `workspace`, `patch` and `crate`. They are sourced and
   have no side effects until `main` calls them.
 - `<crate>` branches (`renet`, `moonshine_behavior`, `moonshine_kind`, `moonshine_util`,
-  `bevy_capture`): generated output of `scripts/apply`. Never edit them by
+  `bevy_capture`, `bevy_hanabi`): generated output of `scripts/apply`. Never edit them by
   hand; change the patches and regenerate.
 
 ## Update flow
@@ -122,10 +122,20 @@ Upstream: <https://github.com/jannik4/bevy_capture> at `3439c61595ef40e07a54d9de
 - `0003`: runtime test in `tests/readback.rs` that captures a 320 by 2 headless target through
   `CapturePlugin` and asserts the frame byte length and both rows; it needs a GPU adapter.
 
+### bevy_hanabi
+
+Upstream: <https://github.com/djeedai/bevy_hanabi> at `738b353d9e1120c817099244c7b35091c1af635c`
+(v0.20.0, Bevy 0.20). `scripts/test` runs the library tests only, as upstream CI does on Linux: the
+`gpu_tests` targets open a window. The dev-dependency on Bevy enables `system_font_discovery`,
+which needs the system `fontconfig` library and its `pkg-config` file.
+
+- `0001`: drop `x11` from the `[dependencies.bevy]` features, so a consuming application picks its
+  own windowing backend and a Wayland-only build no longer pulls `x11rb` and `x11-dl`.
+
 ## License
 
 Upstream renet is dual-licensed under MIT and Apache-2.0; see `LICENSE-MIT` and
 `LICENSE-APACHE`. The patches and scripts in this repository are under the same terms.
-Upstream bevy_capture is under MIT or Apache-2.0, and upstream moonshine_behavior,
+Upstream bevy_capture and bevy_hanabi are under MIT or Apache-2.0, and upstream moonshine_behavior,
 moonshine_kind and moonshine_util are under MIT; see the `LICENSE` files in their
 submodules.

@@ -9,6 +9,7 @@ crate::test_packages() {
 	moonshine_kind) echo "-p moonshine-kind" ;;
 	moonshine_behavior) echo "-p moonshine-behavior" ;;
 	bevy_capture) echo "-p bevy_capture --features mp4_ffmpeg_cli_pipe" ;;
+	bevy_hanabi) echo "-p bevy_hanabi --lib" ;;
 	*) cli::die "no test packages are defined for $1" ;;
 	esac
 }

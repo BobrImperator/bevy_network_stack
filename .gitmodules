@@ -13,3 +13,6 @@
 [submodule "upstream/bevy_capture"]
 	path = upstream/bevy_capture
 	url = https://github.com/jannik4/bevy_capture
+[submodule "upstream/bevy_hanabi"]
+	path = upstream/bevy_hanabi
+	url = https://github.com/djeedai/bevy_hanabi

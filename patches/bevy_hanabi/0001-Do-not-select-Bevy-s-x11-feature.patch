@@ -1,0 +1,29 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bartlomiej Dudzik <15948633+BobrImperator@users.noreply.github.com>
+Date: Mon, 16 Nov 2026 12:00:00 +0100
+Subject: [PATCH] Do not select Bevy's `x11` feature
+
+The `[dependencies.bevy]` feature list enabled `x11`, which pulls the X11
+windowing backend (`x11rb`, `x11-dl`) into every application that depends
+on Hanabi, including Wayland-only ones that never select it. The windowing
+backend is the application's choice: Hanabi renders through `bevy_render`
+and needs no particular window system.
+
+Drop `x11` and keep the rest of the list. The GPU tests and examples still
+open windows through the dev-dependency on Bevy with default features.
+---
+ Cargo.toml | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/Cargo.toml b/Cargo.toml
+index 85f7140..88df111 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -80,7 +80,6 @@ features = [
+   "bevy_render",
+   "bevy_asset",
+   "bevy_log",
+-  "x11",
+ ]
+ 
+ [package.metadata.docs.rs]
